@@ -7,11 +7,11 @@
   "author": "Jason Smith <jason.smith@ctm.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ctmjson/ctm-voiceai-mcp.git"
+    "url": "git+https://github.com/CTMJSON/ctm-voiceai-mcp.git"
   },
-  "homepage": "https://github.com/ctmjson/ctm-voiceai-mcp#readme",
+  "homepage": "https://github.com/CTMJSON/ctm-voiceai-mcp#readme",
   "bugs": {
-    "url": "https://github.com/ctmjson/ctm-voiceai-mcp/issues"
+    "url": "https://github.com/CTMJSON/ctm-voiceai-mcp/issues"
   },
   "keywords": [
     "mcp",

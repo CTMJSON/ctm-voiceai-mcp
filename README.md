@@ -47,7 +47,7 @@ browser automatically when the run finishes.
 ### 1. Get the code
 
 ```bash
-git clone https://github.com/ctmjson/ctm-voiceai-mcp.git
+git clone https://github.com/CTMJSON/ctm-voiceai-mcp.git
 cd ctm-voiceai-mcp
 npm install
 ```
