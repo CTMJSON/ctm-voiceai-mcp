@@ -59,12 +59,12 @@ By default the analysis passes run on **the model this MCP client is using**, vi
 MCP sampling: the server asks the client to run each completion. No API key is
 needed. `ctm_voiceai_configured` reports `sampling_supported`.
 
-The client must support MCP sampling. If it does not, the analysis tools return a
-clear error; there is no separate model or API key to configure. Each extraction
-batch is one host-model request, so the client may ask to approve them. Batches
-default to 100 calls (aligned with the CTM page size) and are additionally
-bounded by total transcript size so they never overflow the model context; raise
-`batch_size` on `ctm_voiceai_analyze` to send even fewer, larger requests.
+If the client does not support sampling (the Claude CLI currently does not), set
+`CTM_VOICEAI_LLM_BASE_URL` and `CTM_VOICEAI_LLM_MODEL` (and `CTM_VOICEAI_LLM_API_KEY`
+if needed) in `~/.config/ctm-voiceai/config.env` to any OpenAI-compatible endpoint
+(hosted or a local model). Sampling is always preferred when available. Each
+extraction batch is one LLM request; batches default to 100 calls and are also
+bounded by total transcript size so they never overflow the model context.
 
 ## Typical run
 

@@ -83,6 +83,10 @@ async function engineEnv(config, { preferBasic = false, llmBridge = null } = {})
   if (llmBridge) {
     env.CTM_VOICEAI_LLM_BRIDGE = llmBridge.url;
     env.CTM_VOICEAI_LLM_BRIDGE_TOKEN = llmBridge.token;
+  } else if (config.llmBaseUrl && config.llmModel) {
+    env.CTM_VOICEAI_LLM_BASE_URL = config.llmBaseUrl;
+    env.CTM_VOICEAI_LLM_MODEL = config.llmModel;
+    if (config.llmApiKey) env.CTM_VOICEAI_LLM_API_KEY = config.llmApiKey;
   }
 
   const bearer = preferBasic ? null : await getAccessToken({ clientId: config.clientId }).catch(() => null);
@@ -124,7 +128,7 @@ function launch({ config, engineArgs, env, runDir, meta, llmBridge = null }) {
     run_dir: runDir,
     engine_args: engineArgs.slice(1),
     auth_mode: env.CTM_BEARER_TOKEN ? "oauth" : env.CTM_BASIC_AUTH ? "basic" : "none",
-    llm_backend: "sampling",
+    llm_backend: env.CTM_VOICEAI_LLM_BRIDGE ? "sampling" : env.CTM_VOICEAI_LLM_BASE_URL ? "http" : "none",
     error: null,
     files
   };

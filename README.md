@@ -150,6 +150,14 @@ The defaults work out of the box. To change them, create
 CTM_VOICEAI_OPEN_REPORT=1        # 0 disables auto-opening the HTML report
 CTM_VOICEAI_OUT_DIR=/custom/runs/dir
 PYTHON_BIN=python3
+
+# Fallback LLM for clients that do NOT support MCP sampling (for example the
+# Claude CLI). Any OpenAI-compatible endpoint works - hosted or local.
+# CTM_VOICEAI_LLM_BASE_URL=https://api.openai.com/v1
+# CTM_VOICEAI_LLM_API_KEY=sk-...
+# CTM_VOICEAI_LLM_MODEL=gpt-4o-mini
+# CTM_VOICEAI_LLM_BASE_URL=http://localhost:11434/v1
+# CTM_VOICEAI_LLM_MODEL=llama3.1
 ```
 
 Precedence: process environment, then `~/.config/ctm-voiceai/config.env`, then
@@ -159,12 +167,16 @@ stored tokens.
 ### Which model runs the analysis
 
 An MCP server is a separate process and cannot directly call your client's model,
-so it uses **MCP sampling**: the server asks your MCP client to run each
-completion, which runs on whatever model that client is using. There is no
-separate model or API key to configure. The client must support MCP sampling;
-`ctm_voiceai_configured` reports `sampling_supported`. Calls are analyzed in
-batches of 100 by default, each one host-model request, and batches also stop at
-a total transcript size so they never overflow the model context.
+so it prefers **MCP sampling**: the server asks your MCP client to run each
+completion, which runs on whatever model that client is using. `ctm_voiceai_configured`
+reports `sampling_supported`.
+
+If your client does not support sampling (the Claude CLI currently does not),
+set the fallback endpoint variables above and the analysis uses that
+OpenAI-compatible API instead. Sampling is always preferred when available, so
+no key is needed for sampling-capable clients. Calls are analyzed in batches of
+100 by default, each one LLM request, and batches also stop at a total transcript
+size so they never overflow the model context.
 
 ## Output
 
@@ -183,9 +195,10 @@ run.json / run.log              job state and engine log
 
 ## Troubleshooting
 
-- **Sampling unsupported** - your MCP client does not advertise MCP sampling,
-  and this server runs the analysis on the host model via sampling. Use a client
-  that supports sampling (`ctm_voiceai_configured` reports `sampling_supported`).
+- **Sampling unsupported** - your MCP client does not advertise MCP sampling and
+  no fallback endpoint is configured. Set `CTM_VOICEAI_LLM_BASE_URL` and
+  `CTM_VOICEAI_LLM_MODEL` (plus `CTM_VOICEAI_LLM_API_KEY` if needed) to any
+  OpenAI-compatible endpoint, or use a client that supports sampling.
 - **"NO_AUTH" from a bot tool** - run `ctm_voiceai_auth_login` first.
 - **Login code expired** - device codes expire after about 25 minutes; just run
   `ctm_voiceai_auth_login` again for a new one.

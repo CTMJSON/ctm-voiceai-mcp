@@ -113,20 +113,77 @@ def get_ctm_auth(env: dict[str, str], auth_key: str) -> str:
 
 
 def require_llm() -> None:
-    if not os.environ.get("CTM_VOICEAI_LLM_BRIDGE"):
+    if not (os.environ.get("CTM_VOICEAI_LLM_BRIDGE") or _http_llm_configured()):
         raise SystemExit(
-            "No LLM available: this engine runs the analysis on the MCP host "
-            "model via MCP sampling. Use an MCP client that supports sampling."
+            "No LLM available. Either use an MCP client that supports MCP sampling, "
+            "or configure an OpenAI-compatible endpoint with "
+            "CTM_VOICEAI_LLM_BASE_URL and CTM_VOICEAI_LLM_MODEL (and "
+            "CTM_VOICEAI_LLM_API_KEY if the endpoint needs one)."
         )
 
 
 # ---------------------------------------------------------------------------
-# LLM transport: MCP sampling bridge
+# LLM transport: MCP sampling bridge, or an OpenAI-compatible HTTP endpoint
 # ---------------------------------------------------------------------------
 
 
 def _bridge_url() -> str | None:
     return os.environ.get("CTM_VOICEAI_LLM_BRIDGE") or None
+
+
+def _http_llm_configured() -> bool:
+    return bool(os.environ.get("CTM_VOICEAI_LLM_BASE_URL") and os.environ.get("CTM_VOICEAI_LLM_MODEL"))
+
+
+def complete_via_http(prompt: str, max_output_tokens: int, timeout: int = 600) -> str:
+    """Run a completion against an OpenAI-compatible chat completions endpoint."""
+    base = os.environ.get("CTM_VOICEAI_LLM_BASE_URL", "").rstrip("/")
+    model = os.environ.get("CTM_VOICEAI_LLM_MODEL", "")
+    api_key = os.environ.get("CTM_VOICEAI_LLM_API_KEY", "")
+    url = base + "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a precise call center analyst."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_output_tokens,
+    }
+    resp = None
+    for attempt in range(4):
+        try:
+            resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+            break
+        except requests.RequestException as exc:
+            if attempt == 3:
+                raise
+            log.warning("LLM request failed (%s) - retrying", exc)
+            time.sleep(2 ** attempt)
+    if resp is None:
+        raise SystemExit("LLM request failed with no response.")
+    if resp.status_code >= 400:
+        raise SystemExit(f"LLM API error {resp.status_code}: {resp.text[:800]}")
+    data = resp.json()
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise SystemExit(f"LLM response had no message content: {json.dumps(data)[:800]}")
+    if not content:
+        raise SystemExit("LLM returned no text.")
+    return content
+
+
+def complete_via_llm(prompt: str, max_output_tokens: int, timeout: int = 600) -> str:
+    """Use the sampling bridge when available, otherwise an OpenAI-compatible endpoint."""
+    if _bridge_url():
+        return complete_via_bridge(prompt, max_output_tokens, timeout)
+    if _http_llm_configured():
+        return complete_via_http(prompt, max_output_tokens, timeout)
+    require_llm()
+    raise SystemExit("No LLM available.")
 
 
 def complete_via_bridge(prompt: str, max_output_tokens: int, timeout: int = 600) -> str:
@@ -474,7 +531,7 @@ def call_llm_json(prompt: str, data_payload: Any, schema: dict, timeout: int = 1
         + json.dumps(schema)
     )
     try:
-        return parse_json_response(complete_via_bridge(composed, 8000))
+        return parse_json_response(complete_via_llm(composed, 8000))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Sampled output is not valid JSON: {exc}") from exc
 
@@ -583,7 +640,7 @@ _PASS2_SCHEMA = {
 
 
 def call_llm_text(prompt: str, max_output_tokens: int = 6000) -> str:
-    return complete_via_bridge(prompt, max_output_tokens)
+    return complete_via_llm(prompt, max_output_tokens)
 
 
 # ---------------------------------------------------------------------------

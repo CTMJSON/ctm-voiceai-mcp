@@ -51,18 +51,21 @@ function safeTool(fn) {
   };
 }
 
-/** Open a sampling bridge so the analysis runs on the MCP host model. */
+/** Choose the analysis LLM: the MCP host model via sampling, or a configured endpoint. */
 async function llmBridgeFor() {
-  const sampling = clientSupportsSampling(server);
-  if (!sampling) {
-    throw new Error(
-      "This MCP client does not advertise MCP sampling support, and the analysis "
-        + "runs on the host model via sampling. Use an MCP client that supports "
-        + "sampling (e.g. Claude Desktop with sampling enabled)."
-    );
+  if (clientSupportsSampling(server)) {
+    const bridge = await startSamplingBridge(server);
+    return { bridge, backend: "sampling" };
   }
-  const bridge = await startSamplingBridge(server);
-  return { bridge };
+  if (config.llmBaseUrl && config.llmModel) {
+    return { bridge: null, backend: "http" };
+  }
+  throw new Error(
+    "This MCP client does not support MCP sampling, and no fallback LLM endpoint is configured. "
+      + "Set CTM_VOICEAI_LLM_BASE_URL and CTM_VOICEAI_LLM_MODEL (and CTM_VOICEAI_LLM_API_KEY "
+      + "if needed) in ~/.config/ctm-voiceai/config.env to any OpenAI-compatible endpoint, or "
+      + "use a client that supports sampling."
+  );
 }
 
 function authSummary(state) {
@@ -363,7 +366,7 @@ server.registerTool(
   safeTool(async (args) => {
     // Fail fast with a clear, actionable message when the CTM login is missing or expired.
     await verifyAuth(config, args.account_id);
-    const { bridge } = await llmBridgeFor();
+    const { bridge, backend } = await llmBridgeFor();
     let result;
     try {
       const skipBotInstructions = args.skip_bot_instructions ?? true;
@@ -386,7 +389,7 @@ server.registerTool(
         pending: Boolean(pending),
         run_dir: record.run_dir,
         auth_mode: record.auth_mode,
-        llm_backend: "sampling",
+        llm_backend: backend,
         message: pending
           ? "Run started. Poll ctm_voiceai_run_status with this run_id."
           : `Run finished with status ${record.status}.`,
@@ -462,7 +465,7 @@ server.registerTool(
     }
     const resolvedAccount = accountId || "unknown";
 
-    const { bridge } = await llmBridgeFor();
+    const { bridge, backend } = await llmBridgeFor();
     let result;
     try {
       const { runId, record, pending } = await startRecommend(config, {
@@ -479,7 +482,7 @@ server.registerTool(
         status: record.status,
         pending: Boolean(pending),
         run_dir: record.run_dir,
-        llm_backend: "sampling",
+        llm_backend: backend,
         call_context: { ...ctx, topics_file: topicsFile, source_run_id: sourceRun },
         message: pending ? "Run started. Poll ctm_voiceai_run_status." : `Run finished with status ${record.status}.`,
         files: record.files
