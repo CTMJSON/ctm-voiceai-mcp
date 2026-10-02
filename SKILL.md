@@ -35,33 +35,39 @@ or name substring) to focus on one agent.
 
 ### 3. Plan the call batches
 
-First make one probe call: `ctm_voiceai_get_calls(account_id="<id>", page=1, per_page=25, direction="inbound")`.
-It returns `total`, `total_pages`, `has_more`, and the first page of calls.
+Make one probe call: `ctm_voiceai_get_calls(account_id="<id>", page=1, per_page=25, direction="inbound", target_calls=500)`.
+
+`target_calls` defaults to **500** (use `0` for every available call). The
+response includes a `plan` object with `total_calls`, `total_pages`, `batch_count`,
+and a `batches` array. **You must analyze every batch in `plan.batches`.**
+Analyzing only the first page is a failure of this flow - a typical account has far
+more calls than fit on one page (for example 2,000 transcribed calls = 81 pages at
+25 per page).
 
 ### 4. Dispatch parallel subagents to assess the calls (default)
 
 **By default, fan the work out to multiple subagents in parallel.** Do not analyze
 every call yourself in one long serial pass. Use the host's subagent/Task tool to
-launch one subagent per page (or per two pages when `total_pages` is small), all in
-a single message so they run concurrently.
+launch **one subagent per entry in `plan.batches`**, all in a single message so they
+run concurrently. Keep going until every batch is done:
 
-Suggested sizing:
+- Cap concurrency at about 5-6 subagents per wave; dispatch in waves until every
+  batch in `plan.batches` has been analyzed.
+- Never stop after one subagent or one page. The finished review must cover
+  `plan.covered_calls` calls (target 500 by default), not 25 or 30.
+- If `plan.batches` has only 1 entry, a single subagent is fine.
 
-- One subagent per page of 25 calls.
-- Cap concurrency at about 5-6 subagents per wave; if `total_pages` is larger,
-  dispatch in waves until every page is covered.
-- If `total_pages` is 1-2, a single subagent (or doing it inline) is fine.
-
-Give **every subagent the same shared context**, then let each analyze its own page:
+Give **every subagent the same shared context**, then let each analyze its own batch:
 
 - the account id
 - the reviewed agent's name and **full current instructions, verbatim**
-- its assigned page number(s) and `per_page`
+- its assigned batch object (`page`, `per_page`) from `plan.batches`
 - the exact JSON shape to return
 
 Instruct each subagent to:
 
-1. Call `ctm_voiceai_get_calls` for its assigned page(s).
+1. Call `ctm_voiceai_get_calls` for its assigned batch (`page` and `per_page` from
+   `plan.batches`).
 2. For each call, extract `id`, `occurred_at`, `topic` (short label),
    `description` (one line on the caller's need), `voice_ai_suitable` (`yes`,
    `partial`, or `no`), and `reasoning` (why: scriptable, needs an integration,

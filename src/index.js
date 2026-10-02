@@ -20,6 +20,7 @@ import { fetchCallsPage, fetchVoiceBots, resolveAuthHeader, selectBots, verifyAu
 import { listRuns, loadRun, runStatus, writeReport } from "./engine.js";
 
 const config = await loadConfig();
+const DEFAULT_TARGET_CALLS = 500;
 const server = new McpServer({ name: "ctm-voiceai", version: "0.1.0" });
 
 function toolResult(value, isError = false) {
@@ -282,11 +283,12 @@ server.registerTool(
   {
     title: "Get Call Activities And Transcriptions",
     description:
-      "Step 3 of the review flow: one GET against the CTM calls endpoint returning a page of answered calls with transcriptions. Call repeatedly, increasing page, until has_more is false. Returns id, date, summary and transcript (truncated to max_transcript_chars) for each call, plus total_pages so you can fan the pages out to parallel subagents.",
+      "Step 3 of the review flow: one GET against the CTM calls endpoint returning a page of answered calls with transcriptions. The response includes a `plan` describing the full parallel coverage: total_pages and an array of `batches` covering `target_calls` (default 500). Dispatch one subagent per batch; each subagent calls this tool with that batch's page and per_page. Returns id, date, summary and transcript (truncated to max_transcript_chars) for each call.",
     inputSchema: {
       account_id: z.string().describe("CTM sub-account id."),
       page: z.number().int().min(1).optional().describe("Page number, starting at 1. Default 1."),
       per_page: z.number().int().min(1).max(100).optional().describe("Calls per page. Default 25; keep it small so the transcripts fit in context."),
+      target_calls: z.number().int().min(0).optional().describe("How many calls the whole review should cover. The plan sizes the batch fan-out to this. Default 500. Use 0 for every available call."),
       since: z.string().optional().describe("Start date YYYY-MM-DD."),
       until: z.string().optional().describe("End date YYYY-MM-DD."),
       direction: z.enum(["inbound", "outbound", "none"]).optional().describe("Default inbound."),
@@ -297,9 +299,10 @@ server.registerTool(
   },
   safeTool(async (args) => {
     const auth = await authHeader(args.account_id);
+    const perPage = args.per_page ?? 25;
     const page = await fetchCallsPage(args.account_id, auth.header, {
       page: args.page ?? 1,
-      perPage: args.per_page ?? 25,
+      perPage,
       since: args.since,
       until: args.until,
       direction: args.direction || "inbound",
@@ -310,6 +313,31 @@ server.registerTool(
       ...c,
       transcript: c.transcript.length > maxChars ? `${c.transcript.slice(0, maxChars)}...` : c.transcript
     }));
+
+    // Build the parallel coverage plan so the assistant fans out instead of
+    // stopping after the one page it happened to fetch.
+    const totalCalls = page.total ?? page.returned;
+    const target = args.target_calls ?? DEFAULT_TARGET_CALLS;
+    const wanted = target > 0 ? Math.min(target, totalCalls) : totalCalls;
+    let batchCount = Math.max(1, Math.ceil(wanted / perPage));
+    if (page.total_pages) batchCount = Math.min(batchCount, page.total_pages);
+    const batches = Array.from({ length: batchCount }, (_, i) => ({
+      batch: i + 1,
+      page: i + 1,
+      per_page: perPage,
+      approx_calls: Math.max(0, Math.min(perPage, wanted - i * perPage))
+    }));
+    const plan = {
+      target_calls: target,
+      covered_calls: batches.reduce((sum, b) => sum + b.approx_calls, 0),
+      total_calls: totalCalls,
+      total_pages: page.total_pages,
+      batch_count: batches.length,
+      batches,
+      instruction:
+        "Dispatch one subagent per batch in parallel (cap ~5-6 concurrent). Do not stop until every batch is analyzed."
+    };
+
     return {
       account_id: args.account_id,
       auth_mode: auth.mode,
@@ -321,6 +349,7 @@ server.registerTool(
       total_pages: page.total_pages,
       has_more: page.has_more,
       next_page: page.next_page,
+      plan,
       calls
     };
   })
