@@ -166,7 +166,8 @@ export async function fetchCallsPage(accountId, authHeader, {
     per_page: perPage,
     returned: rawCalls.length,
     with_transcript: calls.length,
-    total: data.total ?? null,
+    total: data.total_entries ?? data.total ?? null,
+    total_pages: data.total_pages ?? null,
     has_more: Boolean(data.next_page),
     next_page: data.next_page ? page + 1 : null,
     calls

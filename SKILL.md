@@ -33,35 +33,70 @@ Tokens are stored and refreshed automatically.
 instructions, with the full current prompt text. Optionally pass `voice_bot` (id
 or name substring) to focus on one agent.
 
-### 3. Get the call activities and transcriptions
+### 3. Plan the call batches
 
-`ctm_voiceai_get_calls(account_id="<id>", page=1, per_page=25, direction="inbound")`
-performs one GET and returns a page of answered calls with transcriptions
-(`id`, `occurred_at`, `summary`, `transcript`). It also returns `has_more` and
-`next_page`.
+First make one probe call: `ctm_voiceai_get_calls(account_id="<id>", page=1, per_page=25, direction="inbound")`.
+It returns `total`, `total_pages`, `has_more`, and the first page of calls.
 
-Page through the calls until `has_more` is false. Keep `per_page` small enough
-that the transcripts fit comfortably in context (25-40 is a good range).
+### 4. Dispatch parallel subagents to assess the calls (default)
 
-### 4. Compare the transcripts against the instructions
+**By default, fan the work out to multiple subagents in parallel.** Do not analyze
+every call yourself in one long serial pass. Use the host's subagent/Task tool to
+launch one subagent per page (or per two pages when `total_pages` is small), all in
+a single message so they run concurrently.
 
-Process one page at a time. For each call, extract:
+Suggested sizing:
 
-- **topic**: a short label for what the caller wanted.
-- **description**: one line on the caller's need.
-- **voice_ai_suitable**: `yes`, `partial`, or `no`.
-- **reasoning**: why (scriptable, needs an integration, needs a human, etc.).
+- One subagent per page of 25 calls.
+- Cap concurrency at about 5-6 subagents per wave; if `total_pages` is larger,
+  dispatch in waves until every page is covered.
+- If `total_pages` is 1-2, a single subagent (or doing it inline) is fine.
 
-Then compare that against the agent instructions: which topics are already
-covered well, partially, or not at all.
+Give **every subagent the same shared context**, then let each analyze its own page:
 
-### 5. Assess and make recommendations
+- the account id
+- the reviewed agent's name and **full current instructions, verbatim**
+- its assigned page number(s) and `per_page`
+- the exact JSON shape to return
 
-Accumulate the per-call extractions across all pages, then synthesize:
+Instruct each subagent to:
 
-- **Canonical topics** ranked by call volume, merging near-duplicates, each with
-  `name`, `description`, `call_count`, `voice_ai_suitability` (`High`/`Medium`/`Low`),
-  `rationale`, and up to 5 `example_call_ids`.
+1. Call `ctm_voiceai_get_calls` for its assigned page(s).
+2. For each call, extract `id`, `occurred_at`, `topic` (short label),
+   `description` (one line on the caller's need), `voice_ai_suitable` (`yes`,
+   `partial`, or `no`), and `reasoning` (why: scriptable, needs an integration,
+   needs a human).
+3. Compare each call against the current instructions: already covered well,
+   partially covered, or not covered.
+4. Return **only compact JSON**, no prose:
+
+   ```json
+   {
+     "page": 1,
+     "calls": [
+       {"id": 0, "occurred_at": "", "topic": "", "description": "", "voice_ai_suitable": "yes", "reasoning": "", "covered": "good|partial|none"}
+     ],
+     "topics": [{"name": "", "call_count": 0, "voice_ai_suitability": "High|Medium|Low", "rationale": ""}],
+     "notes": "anything notable across this batch"
+   }
+   ```
+
+Subagents must report from the transcripts only. They must not invent
+capabilities, integrations, or caller needs, and must not use em dashes.
+
+If subagents cannot reach the MCP server, fall back: fetch each page yourself and
+pass the transcripts to the subagent inline in the Task prompt. Parallel dispatch
+is still the goal.
+
+### 5. Merge and make recommendations
+
+Collect the per-page JSON from every subagent and merge:
+
+- De-duplicate near-identical topics and sum their `call_count`.
+- Rank canonical topics by call volume.
+- Build the per-call rows from the union of the subagents' `calls`.
+
+Then write:
 - **Recommended Prompt Updates** Markdown per agent, with these sections:
   - `# Recommended Prompt Updates` (one short intro paragraph)
   - `## Coverage Map` - a table: Observed topic | Calls | Voice AI fit | Current

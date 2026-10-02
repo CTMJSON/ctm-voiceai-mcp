@@ -282,7 +282,7 @@ server.registerTool(
   {
     title: "Get Call Activities And Transcriptions",
     description:
-      "Step 3 of the review flow: one GET against the CTM calls endpoint returning a page of answered calls with transcriptions. Call repeatedly, increasing page, until has_more is false. Returns id, date, summary and transcript (truncated to max_transcript_chars) for each call.",
+      "Step 3 of the review flow: one GET against the CTM calls endpoint returning a page of answered calls with transcriptions. Call repeatedly, increasing page, until has_more is false. Returns id, date, summary and transcript (truncated to max_transcript_chars) for each call, plus total_pages so you can fan the pages out to parallel subagents.",
     inputSchema: {
       account_id: z.string().describe("CTM sub-account id."),
       page: z.number().int().min(1).optional().describe("Page number, starting at 1. Default 1."),
@@ -317,6 +317,8 @@ server.registerTool(
       per_page: page.per_page,
       returned: page.returned,
       with_transcript: page.with_transcript,
+      total: page.total,
+      total_pages: page.total_pages,
       has_more: page.has_more,
       next_page: page.next_page,
       calls

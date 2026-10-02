@@ -26,10 +26,13 @@ Highlights:
 
 1. **Authenticate** with CTM via OAuth device flow (`ctm_voiceai_auth_login`).
 2. **Get the VoiceAI agents and their instructions** (`ctm_voiceai_get_voice_bots`).
-3. **Get the call activities and transcriptions** (`ctm_voiceai_get_calls`), paging
-   through until done.
-4. **Your assistant compares** the transcripts against the instructions, call by call.
-5. **Your assistant assesses and writes recommendations**, including a full rewrite.
+3. **Get the call activities and transcriptions** (`ctm_voiceai_get_calls`). A probe
+   call reports `total_pages`, then the assistant **fans the pages out to parallel
+   subagents** so large call volumes are analyzed concurrently instead of serially.
+4. **The subagents compare** the transcripts against the instructions, call by call,
+   and return compact per-call JSON.
+5. **Your assistant merges the batches** and writes the recommendations, including a
+   full rewrite.
 6. **Write the report** (`ctm_voiceai_write_report`), which saves the files, renders
    the HTML report, and opens it in your browser.
 
