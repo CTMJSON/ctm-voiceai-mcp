@@ -51,31 +51,18 @@ function safeTool(fn) {
   };
 }
 
-/** Decide how the analysis passes get their LLM, and open a sampling bridge if needed. */
+/** Open a sampling bridge so the analysis runs on the MCP host model. */
 async function llmBridgeFor() {
-  const pref = config.llmBackend;
   const sampling = clientSupportsSampling(server);
-
-  if (pref === "openai") {
-    if (!config.openaiApiKey) throw new Error("CTM_VOICEAI_LLM=openai but OPENAI_API_KEY is not set.");
-    return { bridge: null, backend: "openai", sampling };
+  if (!sampling) {
+    throw new Error(
+      "This MCP client does not advertise MCP sampling support, and the analysis "
+        + "runs on the host model via sampling. Use an MCP client that supports "
+        + "sampling (e.g. Claude Desktop with sampling enabled)."
+    );
   }
-  if (pref === "sampling" || sampling) {
-    if (!sampling) {
-      throw new Error(
-        "CTM_VOICEAI_LLM=sampling but this MCP client does not advertise sampling support. "
-          + "Set OPENAI_API_KEY and CTM_VOICEAI_LLM=openai, or use an MCP client with sampling."
-      );
-    }
-    const bridge = await startSamplingBridge(server);
-    return { bridge, backend: "sampling", sampling };
-  }
-  if (config.openaiApiKey) return { bridge: null, backend: "openai", sampling };
-
-  throw new Error(
-    "No LLM available: this MCP client does not support sampling and no OPENAI_API_KEY is set. "
-      + "Use a client that supports MCP sampling (zero-config) or add an OpenAI key."
-  );
+  const bridge = await startSamplingBridge(server);
+  return { bridge };
 }
 
 function authSummary(state) {
@@ -104,7 +91,7 @@ server.registerTool(
   {
     title: "VoiceAI MCP Configuration",
     description:
-      "Shows configured CTM VoiceAI settings: OAuth client id, login state, whether an OpenAI key is present, the Python engine path, and where analysis runs are written. Never reveals secrets.",
+      "Shows configured CTM VoiceAI settings: OAuth client id, login state, sampling support, the Python engine path, and where analysis runs are written. Never reveals secrets.",
     inputSchema: {},
     annotations: { readOnlyHint: true }
   },
@@ -337,7 +324,6 @@ const analyzeSchema = {
   since: z.string().optional().describe("Start date YYYY-MM-DD."),
   until: z.string().optional().describe("End date YYYY-MM-DD."),
   direction: z.enum(["inbound", "outbound", "none"]).optional().describe("Default inbound."),
-  model: z.string().optional().describe("OpenAI model, only used when the LLM backend is openai."),
   batch_size: z
     .number()
     .int()
@@ -370,7 +356,7 @@ server.registerTool(
     annotations: { openWorldHint: true }
   },
   safeTool(async (args) => {
-    const { bridge, backend } = await llmBridgeFor();
+    const { bridge } = await llmBridgeFor();
     let result;
     try {
       const skipBotInstructions = args.skip_bot_instructions ?? true;
@@ -380,7 +366,6 @@ server.registerTool(
         since: args.since,
         until: args.until,
         direction: args.direction || "inbound",
-        model: args.model,
         batchSize: args.batch_size,
         voiceBot: args.voice_bot,
         outDir: args.out_dir,
@@ -394,7 +379,7 @@ server.registerTool(
         pending: Boolean(pending),
         run_dir: record.run_dir,
         auth_mode: record.auth_mode,
-        llm_backend: backend,
+        llm_backend: "sampling",
         message: pending
           ? "Run started. Poll ctm_voiceai_run_status with this run_id."
           : `Run finished with status ${record.status}.`,
@@ -426,7 +411,6 @@ server.registerTool(
         .describe("run_id from a COMPLETED ctm_voiceai_analyze run. Its call topics and captured agent prompt are reused."),
       account_id: z.string().optional().describe("Defaults to the account of the referenced run."),
       voice_bot: z.union([z.string(), z.array(z.string())]).optional(),
-      model: z.string().optional(),
       out_dir: z.string().optional(),
       wait: z.boolean().optional().describe("If true (default), wait and return the recommendations inline. Set false to return a run_id immediately."),
       topics_file: z.string().optional().describe("Advanced override. Must be a pass2 topics JSON from a call analysis."),
@@ -471,7 +455,7 @@ server.registerTool(
     }
     const resolvedAccount = accountId || "unknown";
 
-    const { bridge, backend } = await llmBridgeFor();
+    const { bridge } = await llmBridgeFor();
     let result;
     try {
       const { runId, record, pending } = await startRecommend(config, {
@@ -479,7 +463,6 @@ server.registerTool(
         topicsFile,
         botsFile,
         voiceBot: args.voice_bot,
-        model: args.model,
         outDir: args.out_dir,
         llmBridge: bridge,
         wait: args.wait ?? true
@@ -489,7 +472,7 @@ server.registerTool(
         status: record.status,
         pending: Boolean(pending),
         run_dir: record.run_dir,
-        llm_backend: backend,
+        llm_backend: "sampling",
         call_context: { ...ctx, topics_file: topicsFile, source_run_id: sourceRun },
         message: pending ? "Run started. Poll ctm_voiceai_run_status." : `Run finished with status ${record.status}.`,
         files: record.files

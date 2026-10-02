@@ -80,7 +80,7 @@ assert.ok(payload.auth, "auth block present");
 
 console.log(`OK - ${names.length} tools registered`);
 console.log(`configured.logged_in = ${payload.auth.logged_in}`);
-console.log(`configured.openai_key_present = ${payload.openai_key_present}`);
+console.log(`configured.sampling_supported = ${payload.sampling_supported}`);
 
 child.kill("SIGTERM");
 process.exit(0);

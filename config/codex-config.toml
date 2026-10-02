@@ -2,4 +2,3 @@
 [mcp_servers.ctmVoiceAI]
 command = "node"
 args = ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js"]
-# env = { OPENAI_API_KEY = "sk-..." }   # only if the client lacks MCP sampling

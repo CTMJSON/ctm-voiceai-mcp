@@ -19,7 +19,7 @@ Usage:
     python3 ctm_voiceai_topic_analysis.py --account-id <your_account_id> --target 500
 
 Credentials are read from ~/.config/ctm-voiceai/config.env (key:value per
-line) unless overridden by CTM_BASIC_AUTH / OPENAI_API_KEY env vars.
+line) unless overridden by CTM_BASIC_AUTH / CTM_BEARER_TOKEN env vars.
 
 When CTM_BEARER_TOKEN is set in the environment (as the MCP server does after
 an OAuth2 login), it takes precedence and requests are sent with
@@ -57,7 +57,6 @@ DEFAULT_AUTH_KEY = "CTM_BASIC_AUTH"
 DEFAULT_TARGET = 500
 DEFAULT_PER_PAGE = 100
 DEFAULT_BATCH_SIZE = 40
-DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_TRANSCRIPT_CHARS = 4000
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
@@ -109,18 +108,16 @@ def get_ctm_auth(env: dict[str, str], auth_key: str) -> str:
     return f"Basic {token}"
 
 
-def get_openai_key(env: dict[str, str]) -> str:
-    key = os.environ.get("OPENAI_API_KEY") or env.get("OPENAI_API_KEY")
-    if not key and not os.environ.get("CTM_VOICEAI_LLM_BRIDGE"):
+def require_llm() -> None:
+    if not os.environ.get("CTM_VOICEAI_LLM_BRIDGE"):
         raise SystemExit(
-            "No LLM available. Set OPENAI_API_KEY, or run under the MCP server with "
-            "MCP sampling (CTM_VOICEAI_LLM_BRIDGE)."
+            "No LLM available: this engine runs the analysis on the MCP host "
+            "model via MCP sampling. Use an MCP client that supports sampling."
         )
-    return (key or "").strip()
 
 
 # ---------------------------------------------------------------------------
-# LLM transport: MCP sampling bridge or the OpenAI Responses API
+# LLM transport: MCP sampling bridge
 # ---------------------------------------------------------------------------
 
 
@@ -463,60 +460,23 @@ def _truncate(text: str | None, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[:max_chars].rstrip() + "..."
 
 
-def call_openai_json_schema(
-    openai_key: str, model: str, prompt: str, data_payload: Any, schema: dict, schema_name: str, timeout: int = 180
-) -> dict:
-    if _bridge_url():
-        composed = (
-            prompt
-            + "\n\nDATA_JSON = "
-            + json.dumps(data_payload, ensure_ascii=False)
-            + "\n\nReturn ONLY valid JSON (no prose, no code fences) that matches this JSON schema:\n"
-            + json.dumps(schema)
-        )
-        try:
-            return parse_json_response(complete_via_bridge(composed, 8000))
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"Sampled output is not valid JSON: {exc}") from exc
-
-    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-    body = {
-        "model": model,
-        "instructions": "You are a precise call center analyst.",
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": prompt + "\n\nDATA_JSON = " + json.dumps(data_payload, ensure_ascii=False),
-                    }
-                ],
-            }
-        ],
-        "text": {"format": {"name": schema_name, "type": "json_schema", "strict": True, "schema": schema}},
-    }
-    resp = requests.post("https://api.openai.com/v1/responses", headers=headers, json=body, timeout=timeout)
-    if resp.status_code >= 400:
-        raise SystemExit(f"OpenAI API error {resp.status_code}: {resp.text[:800]}")
-    data = resp.json()
-    output_text = "".join(
-        part.get("text", "")
-        for item in data.get("output", [])
-        if item.get("type") == "message"
-        for part in item.get("content", [])
-        if part.get("type") == "output_text"
+def call_llm_json(prompt: str, data_payload: Any, schema: dict, timeout: int = 180) -> dict:
+    """Ask the MCP host model (via its sampling bridge) for JSON matching schema."""
+    composed = (
+        prompt
+        + "\n\nDATA_JSON = "
+        + json.dumps(data_payload, ensure_ascii=False)
+        + "\n\nReturn ONLY valid JSON (no prose, no code fences) that matches this JSON schema:\n"
+        + json.dumps(schema)
     )
-    if not output_text:
-        raise SystemExit("OpenAI response contained no output_text.")
     try:
-        return json.loads(output_text)
+        return parse_json_response(complete_via_bridge(composed, 8000))
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"OpenAI output is not valid JSON: {exc}") from exc
+        raise SystemExit(f"Sampled output is not valid JSON: {exc}") from exc
 
 
 def run_pass1(
-    openai_key: str, model: str, records: list[dict], batch_size: int, max_transcript_chars: int
+    records: list[dict], batch_size: int, max_transcript_chars: int
 ) -> list[dict]:
     payload = [
         {
@@ -533,9 +493,7 @@ def run_pass1(
     for start in range(0, len(payload), batch_size):
         batch = payload[start : start + batch_size]
         log.info("Pass 1: batch %d-%d / %d", start + 1, start + len(batch), len(payload))
-        parsed = call_openai_json_schema(
-            openai_key, model, PASS1_PROMPT, batch, _PASS1_SCHEMA, "call_topics"
-        )
+        parsed = call_llm_json(PASS1_PROMPT, batch, _PASS1_SCHEMA)
         for item in parsed.get("items", []):
             item["occurred_at"] = occurred_lookup.get(item.get("id"), "")
             results.append(item)
@@ -602,46 +560,8 @@ _PASS2_SCHEMA = {
 }
 
 
-def call_openai_text(
-    openai_key: str, model: str, prompt: str, timeout: int = 300, max_output_tokens: int = 6000
-) -> str:
-    if _bridge_url():
-        return complete_via_bridge(prompt, max_output_tokens)
-
-    headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-    body = {
-        "model": model,
-        "instructions": "You are a precise call center analyst.",
-        "input": [
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": prompt}],
-            }
-        ],
-        "max_output_tokens": max_output_tokens,
-    }
-    for attempt in range(4):
-        try:
-            resp = requests.post("https://api.openai.com/v1/responses", headers=headers, json=body, timeout=timeout)
-            break
-        except requests.RequestException as exc:
-            if attempt == 3:
-                raise
-            log.warning("OpenAI request failed (%s) — retrying", exc)
-            time.sleep(2 ** attempt)
-    if resp.status_code >= 400:
-        raise SystemExit(f"OpenAI API error {resp.status_code}: {resp.text[:800]}")
-    data = resp.json()
-    output_text = "".join(
-        part.get("text", "")
-        for item in data.get("output", [])
-        if item.get("type") == "message"
-        for part in item.get("content", [])
-        if part.get("type") == "output_text"
-    )
-    if not output_text:
-        raise SystemExit("OpenAI response contained no output_text.")
-    return output_text
+def call_llm_text(prompt: str, max_output_tokens: int = 6000) -> str:
+    return complete_via_bridge(prompt, max_output_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +622,7 @@ TOPICS_JSON = {topics_json}
 """
 
 
-def run_pass3(openai_key: str, model: str, topics: list[dict], account_id: str, call_count: int) -> str:
+def run_pass3(topics: list[dict], account_id: str, call_count: int) -> str:
     payload = [
         {
             "name": t.get("name", ""),
@@ -716,7 +636,7 @@ def run_pass3(openai_key: str, model: str, topics: list[dict], account_id: str, 
     context = {"account_id": account_id, "call_count": call_count, "topics": payload}
     log.info("Pass 3: generating VoiceAI bot configuration instructions")
     prompt = PASS3_PROMPT.format(topics_json=json.dumps(context, ensure_ascii=False, indent=2))
-    return call_openai_text(openai_key, model, prompt, max_output_tokens=6500)
+    return call_llm_text(prompt, max_output_tokens=6500)
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +704,7 @@ CURRENT_INSTRUCTIONS = {instructions}
 
 
 def run_pass4(
-    openai_key: str, model: str, topics: list[dict], account_id: str, call_count: int, bot: dict
+    topics: list[dict], account_id: str, call_count: int, bot: dict
 ) -> str:
     account_json = {
         "account_id": account_id,
@@ -807,10 +727,10 @@ def run_pass4(
         account_json=json.dumps(account_json, ensure_ascii=False, indent=2),
         instructions=bot.get("instructions", ""),
     )
-    return call_openai_text(openai_key, model, prompt, max_output_tokens=8000)
+    return call_llm_text(prompt, max_output_tokens=8000)
 
 
-def run_pass2(openai_key: str, model: str, pass1_items: list[dict]) -> list[dict]:
+def run_pass2(pass1_items: list[dict]) -> list[dict]:
     payload = [
         {
             "id": item["id"],
@@ -823,7 +743,7 @@ def run_pass2(openai_key: str, model: str, pass1_items: list[dict]) -> list[dict
         for item in pass1_items
     ]
     log.info("Pass 2: synthesizing %d call-topic extractions into canonical topics", len(payload))
-    parsed = call_openai_json_schema(openai_key, model, PASS2_PROMPT, payload, _PASS2_SCHEMA, "topic_synthesis")
+    parsed = call_llm_json(PASS2_PROMPT, payload, _PASS2_SCHEMA)
     topics = parsed.get("topics", [])
     topics.sort(key=lambda t: t.get("call_count", 0), reverse=True)
     return topics
@@ -1226,7 +1146,6 @@ def main() -> None:
     p.add_argument("--since", metavar="YYYY-MM-DD")
     p.add_argument("--until", metavar="YYYY-MM-DD")
     p.add_argument("--direction", default="inbound", choices=["inbound", "outbound", "none"], help="Filter by call direction (default inbound; 'none' = no filter)")
-    p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     p.add_argument("--max-transcript-chars", type=int, default=DEFAULT_MAX_TRANSCRIPT_CHARS)
     p.add_argument("--input", metavar="FILE", help="Use a local JSON file of calls instead of the CTM API")
@@ -1249,7 +1168,7 @@ def main() -> None:
     args = p.parse_args()
 
     env = load_env_file(args.env_file)
-    openai_key = get_openai_key(env)
+    require_llm()
     basic_auth: str | None = None
     pass1_items: list[dict] = []
 
@@ -1294,7 +1213,7 @@ def main() -> None:
                 raise SystemExit("No transcribed calls found for the given window.")
 
             call_count = len(records)
-            pass1_items = run_pass1(openai_key, args.model, records, args.batch_size, args.max_transcript_chars)
+            pass1_items = run_pass1(records, args.batch_size, args.max_transcript_chars)
             log.info("Pass 1 produced %d call-topic extractions", len(pass1_items))
 
             if args.save_pass1:
@@ -1304,7 +1223,7 @@ def main() -> None:
         if not pass1_items:
             raise SystemExit("Pass 1 produced no usable topic extractions.")
 
-        topics = run_pass2(openai_key, args.model, pass1_items)
+        topics = run_pass2(pass1_items)
         log.info("Pass 2 produced %d canonical topics", len(topics))
 
         if args.save_pass2:
@@ -1321,7 +1240,7 @@ def main() -> None:
     generated_instructions = ""
     if not args.skip_bot_instructions:
         generated_instructions = redact_text(
-            run_pass3(openai_key, args.model, topics, args.account_id, call_count)
+            run_pass3(topics, args.account_id, call_count)
         )
         Path(args.bot_instructions_out).write_text(generated_instructions, encoding="utf-8")
         log.info("Wrote VoiceAI bot instructions to %s", args.bot_instructions_out)
@@ -1350,7 +1269,7 @@ def main() -> None:
             selected_bots = selected
             sections: list[str] = []
             for bot in selected:
-                recs = run_pass4(openai_key, args.model, topics, args.account_id, call_count, bot)
+                recs = run_pass4(topics, args.account_id, call_count, bot)
                 # Only redact contact patterns; do NOT run sanitize_names here, it would
                 # rewrite Title Case Markdown headings (e.g. "Coverage Map") into names.
                 recs = redact_text(recs)

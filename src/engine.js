@@ -39,7 +39,6 @@ function analyzeArgs(config, opts, files) {
     config.enginePath,
     "--account-id", String(opts.accountId),
     "--target", String(opts.target ?? 500),
-    "--model", opts.model || config.model,
     "--save-pass1", files.pass1_cache,
     "--save-pass2", files.pass2_cache,
     "--save-voice-bots", files.voice_bots,
@@ -61,7 +60,6 @@ function recommendArgs(config, opts, files) {
   const args = [
     config.enginePath,
     "--account-id", String(opts.accountId),
-    "--model", opts.model || config.model,
     "--pass2-cache", opts.topicsFile,
     "--voice-bots-cache", opts.botsFile,
     "--skip-bot-instructions",
@@ -77,12 +75,10 @@ function recommendArgs(config, opts, files) {
 
 async function engineEnv(config, { preferBasic = false, llmBridge = null } = {}) {
   const env = { ...process.env, PYTHONUNBUFFERED: "1" };
-  if (config.openaiApiKey) env.OPENAI_API_KEY = config.openaiApiKey;
-
+  // The analysis always runs on the MCP host model via the sampling bridge.
   if (llmBridge) {
     env.CTM_VOICEAI_LLM_BRIDGE = llmBridge.url;
     env.CTM_VOICEAI_LLM_BRIDGE_TOKEN = llmBridge.token;
-    delete env.OPENAI_API_KEY;
   }
 
   const bearer = preferBasic ? null : await getAccessToken({ clientId: config.clientId }).catch(() => null);
@@ -124,7 +120,7 @@ function launch({ config, engineArgs, env, runDir, meta, llmBridge = null }) {
     run_dir: runDir,
     engine_args: engineArgs.slice(1),
     auth_mode: env.CTM_BEARER_TOKEN ? "oauth" : env.CTM_BASIC_AUTH ? "basic" : "none",
-    llm_backend: env.CTM_VOICEAI_LLM_BRIDGE ? "sampling" : env.OPENAI_API_KEY ? "openai" : "none",
+    llm_backend: "sampling",
     error: null,
     files
   };

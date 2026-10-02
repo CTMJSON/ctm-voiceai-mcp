@@ -12,9 +12,8 @@ updates** - all in one HTML report.
 
 Highlights:
 
-- **No API key.** Login is CTM OAuth2 (device flow). You sign in with your own
-  CTM credentials, and you only see the accounts your login can access.
-- **No OpenAI key needed.** The analysis runs on the model your MCP client is
+- **No API keys at all.** No CTM API key and no model API key. Login is CTM
+  OAuth2 (device flow), and the analysis runs on the model your MCP client is
   already using, via MCP sampling.
 - Works with any MCP-capable client: Claude Desktop, Claude Code, Codex, pi, or
   a local LLM agent.
@@ -142,14 +141,7 @@ The defaults work out of the box. To change them, create
 `~/.config/ctm-voiceai/config.env`:
 
 ```ini
-# Force a specific LLM backend: auto (default) | sampling | openai
-CTM_VOICEAI_LLM=auto
-
-# Optional: only needed if your MCP client does NOT support MCP sampling
-# OPENAI_API_KEY=sk-...
-
 # Optional tuning
-CTM_VOICEAI_MODEL=gpt-5.4-mini
 CTM_VOICEAI_OPEN_REPORT=1        # 0 disables auto-opening the HTML report
 CTM_VOICEAI_OUT_DIR=/custom/runs/dir
 PYTHON_BIN=python3
@@ -162,10 +154,10 @@ stored tokens.
 ### Which model runs the analysis
 
 An MCP server is a separate process and cannot directly call your client's model,
-so it uses **MCP sampling**: when your client supports it, the server asks the
-client to run each completion. `auto` (the default) uses sampling when available
-and falls back to OpenAI only if you set `OPENAI_API_KEY`. Use `sampling` to
-require the host model, or `openai` to force the OpenAI API.
+so it uses **MCP sampling**: the server asks your MCP client to run each
+completion, which runs on whatever model that client is using. There is no
+separate model or API key to configure. The client must support MCP sampling;
+`ctm_voiceai_configured` reports `sampling_supported`.
 
 ## Output
 
@@ -183,8 +175,9 @@ run.json / run.log              job state and engine log
 
 ## Troubleshooting
 
-- **"No LLM available"** - your client does not support MCP sampling and no
-  `OPENAI_API_KEY` is set. Add a key, or use a sampling-capable client.
+- **Sampling unsupported** - your MCP client does not advertise MCP sampling,
+  and this server runs the analysis on the host model via sampling. Use a client
+  that supports sampling (`ctm_voiceai_configured` reports `sampling_supported`).
 - **"NO_AUTH" from a bot tool** - run `ctm_voiceai_auth_login` first.
 - **Login code expired** - device codes expire after about 25 minutes; just run
   `ctm_voiceai_auth_login` again for a new one.

@@ -9,7 +9,6 @@ export const ENGINE_PATH = path.join(PACKAGE_ROOT, "engine", "ctm_voiceai_topic_
 
 const DEFAULT_CLIENT_ID = "ROB1_WEfKqNL3HHwBG5FsniXDz_E2WYw_5J_L9LDuuQ";
 const DEFAULT_SCOPE = "profile activity reports";
-const DEFAULT_MODEL = "gpt-5.4-mini";
 
 function extraEnvFile() {
   return process.env.CTM_VOICEAI_ENV_FILE || "";
@@ -55,9 +54,6 @@ export async function loadConfig() {
     paths: p,
     clientId: get("CTM_OAUTH_CLIENT_ID") || DEFAULT_CLIENT_ID,
     scope: get("CTM_OAUTH_SCOPE") || DEFAULT_SCOPE,
-    openaiApiKey: get("OPENAI_API_KEY"),
-    llmBackend: (get("CTM_VOICEAI_LLM") || "auto").toLowerCase(),
-    model: get("CTM_VOICEAI_MODEL") || DEFAULT_MODEL,
     basicAuth: get("CTM_BASIC_AUTH"),
     pythonBin: get("PYTHON_BIN") || "python3",
     enginePath: ENGINE_PATH,
@@ -73,9 +69,7 @@ export function configuredSummary(config) {
   return {
     client_id: clientId,
     auth_priority: ["oauth bearer (CTM_BEARER_TOKEN / stored OAuth token)", "basic auth (CTM_BASIC_AUTH)"],
-    openai_key_present: Boolean(config.openaiApiKey),
-    llm_backend_preference: config.llmBackend,
-    default_model: config.model,
+    analysis_backend: "mcp-sampling (runs on the MCP host model)",
     open_browser_on_login: config.openBrowser,
     open_report_when_done: config.openReport,
     python_bin: config.pythonBin,

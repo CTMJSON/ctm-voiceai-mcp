@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Validates the MCP sampling path: the test client advertises sampling and
-// answers createMessage, so the engine runs with NO OpenAI key.
+// answers createMessage, so the engine runs entirely on the host model.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -15,10 +15,8 @@ const child = spawn(process.execPath, [serverPath], {
   stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
-    CTM_VOICEAI_LLM: "sampling",
     CTM_VOICEAI_ENV_FILE: "/nonexistent-voiceai-env",
-    CTM_VOICEAI_OPEN_REPORT: "0",
-    OPENAI_API_KEY: ""
+    CTM_VOICEAI_OPEN_REPORT: "0"
   }
 });
 
@@ -52,7 +50,7 @@ child.stdout.on("data", (chunk) => {
           stopReason: "endTurn",
           content: {
             type: "text",
-            text: "# Recommended Prompt Updates\n\n(sampled by the host model; no OpenAI key)"
+            text: "# Recommended Prompt Updates\n\n(sampled by the host model)"
           }
         }
       };
@@ -92,7 +90,6 @@ notify("notifications/initialized", {});
 const configured = await rpc("tools/call", { name: "ctm_voiceai_configured", arguments: {} });
 const cfg = JSON.parse(configured.result.content[0].text);
 assert.equal(cfg.sampling_supported, true, "client sampling capability detected");
-assert.equal(cfg.openai_key_present, false, "no OpenAI key in this test");
 
 // Build a fake completed call-analysis run so recommend_updates has call context.
 const outDir = path.join(os.tmpdir(), `ctm-voiceai-sampling-${Date.now()}`);

@@ -2,7 +2,7 @@
 name: ctm-voiceai-prompt-review
 description: Analyze a CallTrackingMetrics (CTM) account's real phone call transcripts to find the caller topics a VoiceAI agent should handle, then compare those topics against the account's current live VoiceAI agent instructions and produce a prioritized, paste-ready list of recommended prompt updates. Use when asked to review, QA, or improve a CTM VoiceAI agent or bot prompt, to find what a voice AI should handle, or to decide whether a bot's prompt matches the customer's actual call mix.
 license: Custom development - contact jason.smith@ctm.com for support
-compatibility: Requires the ctmVoiceAI MCP server (this project) and the Python engine it bundles (Python 3.9+, `requests`). Analysis runs on the host model via MCP sampling by default (zero-config); an OpenAI key is an optional fallback. Login uses CTM OAuth2 (device flow) so no CTM API key is required.
+compatibility: Requires the ctmVoiceAI MCP server (this project) and the Python engine it bundles (Python 3.9+, `requests`). Analysis runs on the host model via MCP sampling. Login uses CTM OAuth2 (device flow) so no CTM API key is required.
 ---
 
 # CTM VoiceAI Prompt Review
@@ -45,7 +45,7 @@ Do this once per session if not already logged in:
    Tell the user to open `https://app.calltrackingmetrics.com/accesscode` and
    enter the code, then call `ctm_voiceai_auth_login` again (or pass
    `wait_seconds`) to finish. This is the OAuth app, not an API key.
-3. `ctm_voiceai_configured` - confirms login, OpenAI key presence, and paths.
+3. `ctm_voiceai_configured` - confirms login, sampling support, and paths.
 
 There is also a web flow: `ctm_voiceai_auth_url` builds the authorize URL, and
 `ctm_voiceai_auth_exchange` swaps the returned `?code=` for tokens.
@@ -56,13 +56,12 @@ If OAuth is not set up yet, the server also honors `CTM_BASIC_AUTH` as a fallbac
 
 By default the analysis passes run on **the model this MCP client is using**, via
 MCP sampling: the server asks the client to run each completion. No API key is
-needed. `ctm_voiceai_configured` reports `sampling_supported` and the chosen
-`llm_backend_preference`.
+needed. `ctm_voiceai_configured` reports `sampling_supported`.
 
-If the client does not support sampling, set `OPENAI_API_KEY` and
-`CTM_VOICEAI_LLM=openai`. With sampling, each extraction batch is one host-model
-request, so the client may ask to approve them; raise `batch_size` on
-`ctm_voiceai_analyze` to send fewer, larger requests.
+The client must support MCP sampling. If it does not, the analysis tools return a
+clear error; there is no separate model or API key to configure. With sampling,
+each extraction batch is one host-model request, so the client may ask to approve
+them; raise `batch_size` on `ctm_voiceai_analyze` to send fewer, larger requests.
 
 ## Typical run
 
@@ -134,7 +133,7 @@ analysis tools selects by id or name substring and defaults to all agents with p
   say so rather than over-reading the sample.
 - Skips generating brand-new bot instructions by default; the goal is reviewing the
   existing agent. Pass `skip_bot_instructions=false` to also draft fresh instructions.
-- The analysis model is whatever the MCP client provides (via MCP sampling), or
-  OpenAI when configured. The skill itself can be driven by any MCP-capable agent.
+- The analysis model is whatever the MCP client provides (via MCP sampling). The
+  skill itself can be driven by any MCP-capable agent that supports sampling.
 
 See [README.md](README.md) for installation, registration, and configuration.
