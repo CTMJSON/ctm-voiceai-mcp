@@ -109,7 +109,7 @@ const call = await rpc("tools/call", {
       {
         id: "bot-1",
         name: "Example Agent",
-        markdown: "# Recommended Prompt Updates\n\n## Coverage Map\n| Topic | Fit |\n|---|---|\n| Booking | Partial |\n\n```\nWhen the caller wants to book, collect the date and time.\n```"
+        markdown: "# Recommended Prompt Updates\n\n## Coverage Map\n| Topic | Fit |\n|---|---|\n| Booking | Partial |\n\n**Existing Customer Warranty/Dispute (1 call)**\n\nWhy: Janet Wills' call reveals conflicting information.\n\n```\nWhen the caller wants to book, collect the date and time.\n```"
       }
     ],
     rewrites: [
@@ -132,6 +132,8 @@ const html = fs.readFileSync(result.files.html, "utf8");
 for (const marker of ['id="topics"', 'id="calls"', 'id="current"', 'id="recommendations"', 'id="rewrite"', "Copy rewritten prompt"]) {
   assert.ok(html.includes(marker), `HTML missing ${marker}`);
 }
+assert.ok(!html.includes("Janet Wills"), "caller name redacted from the rendered report");
+assert.ok(html.includes("Existing Customer Warranty/Dispute"), "report topic label preserved");
 assert.equal(result.html_opened, false, "browser open disabled for the test");
 
 console.log("OK - write_report rendered the HTML report and wrote all files");

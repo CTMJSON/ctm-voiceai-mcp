@@ -19,6 +19,10 @@ Highlights:
   does the thinking.
 - **Read-only.** It never changes a live agent. Recommendations are proposals for
   a human to review and apply.
+- **PII-scrubbed output.** Before anything is written or rendered, the server
+  redacts emails, phone numbers, and detected caller/person names (2-3 word proper
+  names) in the analysis prose, while preserving Markdown structure and the
+  customer's own agent prompt.
 - Works with any MCP-capable client: Claude Desktop, Claude Code, Codex, pi, or a
   local LLM agent.
 

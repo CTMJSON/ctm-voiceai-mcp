@@ -25,7 +25,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node test/smoke.mjs && node test/render.mjs"
+    "test": "node test/sanitize.mjs && node test/smoke.mjs && node test/render.mjs"
   },
   "engines": {
     "node": ">=20"

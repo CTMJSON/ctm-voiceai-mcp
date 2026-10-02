@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { ensureDir, exists, nowIso, readJson, tailFile, writeJson } from "./util.js";
+import { sanitizeArtifacts } from "./sanitize.js";
 
 function safeSegment(value) {
   return String(value).replace(/[^a-zA-Z0-9._-]+/g, "_");
@@ -76,7 +77,7 @@ export async function writeReport(config, { accountId, artifacts, open = true, o
     files: {}
   };
 
-  const payload = { ...artifacts, account_id: artifacts.account_id || accountId || null };
+  const payload = sanitizeArtifacts({ ...artifacts, account_id: artifacts.account_id || accountId || null });
   await writeJson(files.artifacts, payload);
   const recs = recommendationsMarkdown(payload);
   if (recs) await fs.writeFile(files.recommendations, recs, "utf8");

@@ -88,7 +88,8 @@ Instruct each subagent to:
    ```
 
 Subagents must report from the transcripts only. They must not invent
-capabilities, integrations, or caller needs, and must not use em dashes.
+capabilities, integrations, or caller needs, and must not use em dashes. Refer to
+people as "the caller" - never by name.
 
 If subagents cannot reach the MCP server, fall back: fetch each page yourself and
 pass the transcripts to the subagent inline in the Task prompt. Parallel dispatch
@@ -140,8 +141,9 @@ rewrite Markdown, artifacts JSON, CSV).
 ## Notes
 
 - Reads are safe and read-only. It never changes a live agent.
-- Redact names, phone numbers, emails, and account numbers from anything you
-  write into the report.
+- Redact PII. The server scrubs emails, phone numbers, and detected person names
+  (2-3 word proper names) from the analysis before writing the report, but still
+  write "the caller" rather than a name so nothing leaks in the first place.
 - Accounts with few transcribed calls produce thin analyses. Report the call
   count so the user can judge the sample.
 - If a user asks to "analyze the instructions and calls", run the whole flow
