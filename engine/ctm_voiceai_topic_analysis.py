@@ -1095,6 +1095,23 @@ def _stat(n: Any, label: str) -> str:
     return f'<div class="stat"><div class="n">{_escape(n)}</div><div class="l">{_escape(label)}</div></div>'
 
 
+def _open_in_browser(path: Path) -> None:
+    """Best-effort open a file in the OS default browser. Never raises."""
+    import subprocess
+
+    try:
+        url = path.resolve().as_uri()
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform.startswith("win"):
+            os.startfile(url)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log.info("Opened %s in the default browser", path)
+    except Exception as exc:  # noqa: BLE001 - opening the report is best-effort
+        log.warning("Could not open the report in a browser: %s", exc)
+
+
 def build_html(artifacts: dict, output_path: Path) -> None:
     """Render the full analysis report: topics, calls, current prompt, and recommendations."""
     account_id = artifacts.get("account_id")
@@ -1460,6 +1477,10 @@ def main() -> None:
     }
     build_html(artifacts, Path(args.out))
     build_csv(topics, Path(args.csv_out))
+
+    # Pop the report in the browser (set CTM_VOICEAI_OPEN_REPORT=0 to disable).
+    if os.environ.get("CTM_VOICEAI_OPEN_REPORT", "1").strip().lower() not in ("0", "false", "no", "off"):
+        _open_in_browser(Path(args.out))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { ensureDir, exists, nowIso, openInBrowser, readJson, readText, tailFile, writeJson } from "./util.js";
+import { ensureDir, exists, nowIso, readJson, readText, tailFile, writeJson } from "./util.js";
 import { getAccessToken } from "./oauth.js";
 
 const activeRuns = new Map();
@@ -78,6 +77,8 @@ function recommendArgs(config, opts, files) {
 
 async function engineEnv(config, { preferBasic = false, llmBridge = null } = {}) {
   const env = { ...process.env, PYTHONUNBUFFERED: "1" };
+  // The engine opens the finished report in the browser (unless disabled).
+  env.CTM_VOICEAI_OPEN_REPORT = config.openReport ? "1" : "0";
   // The analysis always runs on the MCP host model via the sampling bridge.
   if (llmBridge) {
     env.CTM_VOICEAI_LLM_BRIDGE = llmBridge.url;
@@ -139,9 +140,6 @@ function launch({ config, engineArgs, env, runDir, meta, llmBridge = null }) {
       await writeJson(files.run_state, record).catch(() => {});
       activeRuns.delete(meta.runId);
       if (llmBridge) await llmBridge.close().catch(() => {});
-      if (status === "complete" && config.openReport && record.files.html) {
-        openInBrowser(pathToFileURL(record.files.html).href);
-      }
       resolve(record);
     };
 
