@@ -16,7 +16,7 @@ import {
   tokenState,
   waitForDeviceFlow
 } from "./oauth.js";
-import { fetchVoiceBots, resolveAuthHeader, selectBots } from "./ctm.js";
+import { fetchVoiceBots, resolveAuthHeader, selectBots, verifyAuth } from "./ctm.js";
 import { listRuns, loadRun, readRunArtifacts, readTopics, runStatus, startAnalyze, startRecommend, summarizeTopicsFile } from "./engine.js";
 import { clientSupportsSampling, startSamplingBridge } from "./llmBridge.js";
 
@@ -246,7 +246,10 @@ server.registerTool(
 // VoiceAI agents
 // ---------------------------------------------------------------------------
 
-async function authHeader() {
+async function authHeader(accountId) {
+  // When we know the account, make a lightweight verified call so an expired or
+  // missing login fails fast with a clear, actionable message.
+  if (accountId) return verifyAuth(config, accountId);
   const { header, mode } = await resolveAuthHeader(config);
   return { header, mode };
 }
@@ -261,7 +264,7 @@ server.registerTool(
     annotations: { readOnlyHint: true }
   },
   safeTool(async ({ account_id }) => {
-    const auth = await authHeader();
+    const auth = await authHeader(account_id);
     const bots = await fetchVoiceBots(account_id, auth.header);
     return {
       account_id,
@@ -293,7 +296,7 @@ server.registerTool(
     annotations: { readOnlyHint: true }
   },
   safeTool(async ({ account_id, bot_id, name }) => {
-    const auth = await authHeader();
+    const auth = await authHeader(account_id);
     const bots = await fetchVoiceBots(account_id, auth.header);
     const selector = bot_id || name;
     const selected = selector
@@ -327,10 +330,12 @@ const analyzeSchema = {
   batch_size: z
     .number()
     .int()
-    .min(5)
-    .max(100)
+    .min(10)
+    .max(200)
     .optional()
-    .describe("Calls per extraction batch (default 40). With sampling, each batch is one host-model request."),
+    .describe(
+      "Max calls per extraction batch (default 100, aligned with the CTM page size). Batches are also bounded by total transcript size so they never overflow the model context. Each batch is one host-model sampling request, so larger batches mean fewer requests."
+    ),
   voice_bot: z
     .union([z.string(), z.array(z.string())])
     .optional()
@@ -356,6 +361,8 @@ server.registerTool(
     annotations: { openWorldHint: true }
   },
   safeTool(async (args) => {
+    // Fail fast with a clear, actionable message when the CTM login is missing or expired.
+    await verifyAuth(config, args.account_id);
     const { bridge } = await llmBridgeFor();
     let result;
     try {

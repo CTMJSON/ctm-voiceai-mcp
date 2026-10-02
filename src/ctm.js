@@ -58,6 +58,34 @@ async function getJson(url, authHeader, { timeoutMs = 60000 } = {}) {
   }
 }
 
+/**
+ * Resolve credentials and make a lightweight call so we fail fast (and clearly)
+ * when the CTM login is missing or expired, instead of midway through a run.
+ */
+export async function verifyAuth(config, accountId) {
+  const auth = await resolveAuthHeader(config);
+  if (!accountId) {
+    const err = new Error("A CTM account id is required to verify the login.");
+    err.code = "NO_ACCOUNT";
+    throw err;
+  }
+  const url = `${API_BASE}/accounts/${accountId}/calls?per_page=1`;
+  try {
+    await getJson(url, auth.header, { timeoutMs: 15000 });
+    return auth;
+  } catch (err) {
+    if (err.status === 401 || err.status === 403) {
+      const e = new Error(
+        `CTM rejected the login (HTTP ${err.status}). Your CTM session is missing or expired. `
+          + "Run the ctm_voiceai_auth_login tool to sign in again."
+      );
+      e.code = "NO_AUTH";
+      throw e;
+    }
+    throw err;
+  }
+}
+
 export async function fetchVoiceBots(accountId, authHeader, { perPage = 100 } = {}) {
   let url = `${API_BASE}/accounts/${accountId}/voice_bots?per_page=${perPage}&page=1`;
   const bots = [];

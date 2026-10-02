@@ -130,7 +130,9 @@ The full HTML report opens in your browser when the run completes.
 
 `ctm_voiceai_analyze` waits for completion by default and returns the topics and
 the full recommendations **inline**, so a single call gives your agent everything
-to present in one reply. For very long runs, pass `wait: false` and poll
+to present in one reply. Before it starts, it verifies your CTM login with a
+lightweight call, so a missing or expired session fails fast with a clear message
+to run `ctm_voiceai_auth_login`. For very long runs, pass `wait: false` and poll
 `ctm_voiceai_run_status`.
 
 Prompt feedback is always grounded in the call analysis: `ctm_voiceai_analyze`
@@ -160,7 +162,9 @@ An MCP server is a separate process and cannot directly call your client's model
 so it uses **MCP sampling**: the server asks your MCP client to run each
 completion, which runs on whatever model that client is using. There is no
 separate model or API key to configure. The client must support MCP sampling;
-`ctm_voiceai_configured` reports `sampling_supported`.
+`ctm_voiceai_configured` reports `sampling_supported`. Calls are analyzed in
+batches of 100 by default, each one host-model request, and batches also stop at
+a total transcript size so they never overflow the model context.
 
 ## Output
 

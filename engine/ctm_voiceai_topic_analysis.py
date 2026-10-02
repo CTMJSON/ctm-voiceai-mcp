@@ -56,7 +56,11 @@ DEFAULT_ENV_FILE = Path(
 DEFAULT_AUTH_KEY = "CTM_BASIC_AUTH"
 DEFAULT_TARGET = 500
 DEFAULT_PER_PAGE = 100
-DEFAULT_BATCH_SIZE = 40
+DEFAULT_BATCH_SIZE = 100
+# Safety cap on the total transcript characters per LLM request. A batch stops
+# growing at this size even if the call count has not been reached, so larger
+# batches never overflow the host model's context window.
+DEFAULT_MAX_BATCH_CHARS = 300000
 DEFAULT_MAX_TRANSCRIPT_CHARS = 4000
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
@@ -475,8 +479,23 @@ def call_llm_json(prompt: str, data_payload: Any, schema: dict, timeout: int = 1
         raise SystemExit(f"Sampled output is not valid JSON: {exc}") from exc
 
 
+def _iter_batches(items: list[dict], batch_size: int, max_batch_chars: int):
+    """Group items into large batches, bounded by call count and total transcript size."""
+    batch: list[dict] = []
+    chars = 0
+    for item in items:
+        tlen = len(item.get("transcript") or "")
+        if batch and (len(batch) >= batch_size or chars + tlen > max_batch_chars):
+            yield batch
+            batch, chars = [], 0
+        batch.append(item)
+        chars += tlen
+    if batch:
+        yield batch
+
+
 def run_pass1(
-    records: list[dict], batch_size: int, max_transcript_chars: int
+    records: list[dict], batch_size: int, max_transcript_chars: int, max_batch_chars: int = DEFAULT_MAX_BATCH_CHARS
 ) -> list[dict]:
     payload = [
         {
@@ -489,10 +508,13 @@ def run_pass1(
     ]
     occurred_lookup = {r["id"]: r.get("occurred_at", "") for r in records}
 
+    batches = list(_iter_batches(payload, batch_size, max_batch_chars))
     results: list[dict] = []
-    for start in range(0, len(payload), batch_size):
-        batch = payload[start : start + batch_size]
-        log.info("Pass 1: batch %d-%d / %d", start + 1, start + len(batch), len(payload))
+    done = 0
+    for idx, batch in enumerate(batches, 1):
+        first = done + 1
+        done += len(batch)
+        log.info("Pass 1: batch %d/%d (%d-%d of %d calls)", idx, len(batches), first, done, len(payload))
         parsed = call_llm_json(PASS1_PROMPT, batch, _PASS1_SCHEMA)
         for item in parsed.get("items", []):
             item["occurred_at"] = occurred_lookup.get(item.get("id"), "")
@@ -1250,7 +1272,8 @@ def main() -> None:
     p.add_argument("--since", metavar="YYYY-MM-DD")
     p.add_argument("--until", metavar="YYYY-MM-DD")
     p.add_argument("--direction", default="inbound", choices=["inbound", "outbound", "none"], help="Filter by call direction (default inbound; 'none' = no filter)")
-    p.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    p.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE, help="Max calls per LLM extraction batch (default 100); batches also stop at --max-batch-chars")
+    p.add_argument("--max-batch-chars", type=int, default=DEFAULT_MAX_BATCH_CHARS, help="Max total transcript characters per LLM batch (default 300000)")
     p.add_argument("--max-transcript-chars", type=int, default=DEFAULT_MAX_TRANSCRIPT_CHARS)
     p.add_argument("--input", metavar="FILE", help="Use a local JSON file of calls instead of the CTM API")
     p.add_argument("--pass1-cache", metavar="FILE", help="Skip pass 1 and load per-call topics from this JSON file")
@@ -1318,7 +1341,7 @@ def main() -> None:
                 raise SystemExit("No transcribed calls found for the given window.")
 
             call_count = len(records)
-            pass1_items = run_pass1(records, args.batch_size, args.max_transcript_chars)
+            pass1_items = run_pass1(records, args.batch_size, args.max_transcript_chars, args.max_batch_chars)
             log.info("Pass 1 produced %d call-topic extractions", len(pass1_items))
 
             if args.save_pass1:
