@@ -30,6 +30,9 @@ For a given CTM account id, one run produces:
 3. **Recommended prompt updates** - a Coverage Map of what the current agent
    prompt handles well, partially, or not at all, plus prioritized,
    copy-paste-ready prompt snippets.
+4. **Suggested rewritten prompt** - a complete, self-contained rewrite of the
+   current agent prompt that folds in every recommended change, ready to paste
+   as-is.
 
 Everything lands in a single self-contained HTML report that opens in your
 browser automatically when the run finishes.
@@ -166,6 +169,7 @@ Runs are written to `~/.local/share/ctm-voiceai/runs/<account>-<timestamp>/`:
 ```
 voiceai_topic_analysis.html     the full report (opens automatically)
 recommended_prompt_updates.md   the recommendations as Markdown
+suggested_prompt_rewrite.md     the full rewritten agent prompt
 voiceai_topic_analysis.csv      ranked topics
 pass2_cache.json                canonical topics (re-run input)
 voice_bots.json                 captured current agent prompts

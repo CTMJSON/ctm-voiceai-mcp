@@ -70,11 +70,13 @@ ctm_voiceai_analyze(account_id="<account_id>")
 ```
 
 One call does everything and (by default) waits for completion. The result contains
-`call_context`, the `topics` list, and `recommendations_markdown`. **Present all of
-it in a single reply** - the call topics / coverage first, then the recommended
-updates. Do not just return file paths, do not ask "would you like me to show the
-recommendations?", and do not make the user open the files. The HTML/CSV paths are
-available if they want them, but the answer should be in your message.
+`call_context`, the `topics` list, `recommendations_markdown`, and
+`suggested_rewrite_markdown`. **Present all of it in a single reply** - the call
+topics / coverage first, then the recommended updates, finishing with the
+suggested rewritten prompt. Do not just return file paths, do not ask "would you
+like me to show the recommendations?", and do not make the user open the files.
+The HTML/CSV paths are available if they want them, but the answer should be in
+your message.
 
 If a run is started with `wait: false`, poll `ctm_voiceai_run_status`; the final
 poll also returns the topics and `recommendations_markdown`.
@@ -96,7 +98,8 @@ A run writes to `~/.local/share/ctm-voiceai/runs/<account>-<timestamp>/`:
 | File | What it is |
 |------|------------|
 | `recommended_prompt_updates.md` | The deliverable: coverage map + prioritized updates |
-| `voiceai_topic_analysis.html` | The full self-contained report: topic analysis, per-call analysis, current agent prompt, and paste-ready recommended updates with Copy buttons. This is the artifact to hand the customer. It opens automatically in the browser when the run finishes (disable with `CTM_VOICEAI_OPEN_REPORT=0`). |
+| `suggested_prompt_rewrite.md` | A complete, paste-ready rewrite of the current agent prompt |
+| `voiceai_topic_analysis.html` | The full self-contained report: topic analysis, per-call analysis, current agent prompt, paste-ready recommended updates, and a suggested fully rewritten prompt with Copy buttons. This is the artifact to hand the customer. It opens automatically in the browser when the run finishes (disable with `CTM_VOICEAI_OPEN_REPORT=0`). |
 | `voiceai_topic_analysis.csv` | Canonical topics, call counts, suitabilities |
 | `pass2_cache.json` | Canonical topics (input to re-runs) |
 | `voice_bots.json` | The current agent instructions captured from CTM |

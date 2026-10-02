@@ -351,7 +351,7 @@ server.registerTool(
   {
     title: "Analyze Calls, Then Review Agent Prompt (run this first)",
     description:
-      "The correct entry point for reviewing a VoiceAI agent: fetches the account's transcribed calls, extracts and synthesizes caller topics FIRST, then compares those topics against the account's current agent instructions and writes recommended prompt updates plus HTML/CSV topic reports. Always use this before giving any prompt feedback, so the feedback is grounded in the calls. When complete, the result includes the topic list and the full recommendations inline, so present them in one reply (call topics first, then recommendations) without asking whether to show them or making the user open files. Waits for completion by default. Returns a run id as well; poll ctm_voiceai_run_status if needed.",
+      "The correct entry point for reviewing a VoiceAI agent: fetches the account's transcribed calls, extracts and synthesizes caller topics FIRST, then compares those topics against the account's current agent instructions and writes recommended prompt updates plus HTML/CSV topic reports. Always use this before giving any prompt feedback, so the feedback is grounded in the calls. When complete, the result includes the topic list, the full recommendations, and a suggested fully rewritten prompt (suggested_rewrite_markdown), so present them in one reply (call topics first, then recommendations, then the rewritten prompt) without asking whether to show them or making the user open files. Waits for completion by default. Returns a run id as well; poll ctm_voiceai_run_status if needed.",
     inputSchema: analyzeSchema,
     annotations: { openWorldHint: true }
   },
@@ -404,7 +404,7 @@ server.registerTool(
   {
     title: "Re-run Prompt Review From a Prior Call Analysis",
     description:
-      "ADVANCED / re-run only. Regenerates prompt recommendations using the call topics already captured by a completed ctm_voiceai_analyze run (identified by run_id). Use this only after the agent prompt changed and you want a fresh comparison against the SAME call analysis; it does NOT fetch calls. For a first review, call ctm_voiceai_analyze instead. Errors if the run has no call-topic analysis. Returns the recommendations inline on completion.",
+      "ADVANCED / re-run only. Regenerates prompt recommendations using the call topics already captured by a completed ctm_voiceai_analyze run (identified by run_id). Use this only after the agent prompt changed and you want a fresh comparison against the SAME call analysis; it does NOT fetch calls. For a first review, call ctm_voiceai_analyze instead. Errors if the run has no call-topic analysis. Returns the recommendations inline on completion, plus a suggested fully rewritten prompt (suggested_rewrite_markdown).",
     inputSchema: {
       run_id: z
         .string()

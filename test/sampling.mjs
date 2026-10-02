@@ -167,8 +167,12 @@ assert.ok(
   typeof result.recommendations_markdown === "string" && result.recommendations_markdown.length > 0,
   "recommendations returned inline"
 );
+assert.ok(
+  typeof result.suggested_rewrite_markdown === "string" && result.suggested_rewrite_markdown.length > 0,
+  "suggested rewritten prompt returned inline"
+);
 assert.ok(Array.isArray(result.topics) && result.topics.length > 0, "topics returned inline");
-assert.ok(samplingCalls >= 1, "client received createMessage requests");
+assert.ok(samplingCalls >= 2, "client received createMessage requests (recommendations + rewrite)");
 
 console.log(`OK - sampling backend ran pass 4 with ${samplingCalls} createMessage call(s)`);
 console.log(`call_context: ${result.call_context.topic_count} topics / ${result.call_context.call_count} calls`);

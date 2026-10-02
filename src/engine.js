@@ -30,7 +30,8 @@ export function runFiles(runDir) {
     html: path.join(runDir, "voiceai_topic_analysis.html"),
     csv: path.join(runDir, "voiceai_topic_analysis.csv"),
     bot_instructions: path.join(runDir, "voiceai_bot_instructions.md"),
-    recommendations: path.join(runDir, "recommended_prompt_updates.md")
+    recommendations: path.join(runDir, "recommended_prompt_updates.md"),
+    rewrite: path.join(runDir, "suggested_prompt_rewrite.md")
   };
 }
 
@@ -44,7 +45,8 @@ function analyzeArgs(config, opts, files) {
     "--save-voice-bots", files.voice_bots,
     "--out", files.html,
     "--csv-out", files.csv,
-    "--recommendations-out", files.recommendations
+    "--recommendations-out", files.recommendations,
+    "--rewrite-out", files.rewrite
   ];
   if (opts.since) args.push("--since", String(opts.since));
   if (opts.until) args.push("--until", String(opts.until));
@@ -65,7 +67,8 @@ function recommendArgs(config, opts, files) {
     "--skip-bot-instructions",
     "--out", files.html,
     "--csv-out", files.csv,
-    "--recommendations-out", files.recommendations
+    "--recommendations-out", files.recommendations,
+    "--rewrite-out", files.rewrite
   ];
   // Reuse the source run's per-call extractions so the report keeps the call-level section.
   if (opts.topicsFile) args.push("--pass1-cache", path.join(path.dirname(opts.topicsFile), "pass1_cache.json"));
@@ -130,7 +133,7 @@ function launch({ config, engineArgs, env, runDir, meta, llmBridge = null }) {
       record.status = status;
       if (error && !record.error) record.error = error;
       record.finished_at = nowIso();
-      for (const key of ["pass2_cache", "voice_bots", "html", "csv", "bot_instructions", "recommendations"]) {
+      for (const key of ["pass2_cache", "voice_bots", "html", "csv", "bot_instructions", "recommendations", "rewrite"]) {
         record.files[key] = (await exists(files[key])) ? files[key] : null;
       }
       await writeJson(files.run_state, record).catch(() => {});
@@ -291,6 +294,13 @@ export async function readRunArtifacts(state, { maxRecommendationChars = 200000 
     const text = await readText(state.files.recommendations, "");
     if (text) {
       out.recommendations_markdown =
+        text.length > maxRecommendationChars ? `${text.slice(0, maxRecommendationChars)}\n\n[truncated]` : text;
+    }
+  }
+  if (state?.files?.rewrite) {
+    const text = await readText(state.files.rewrite, "");
+    if (text) {
+      out.suggested_rewrite_markdown =
         text.length > maxRecommendationChars ? `${text.slice(0, maxRecommendationChars)}\n\n[truncated]` : text;
     }
   }

@@ -730,6 +730,87 @@ def run_pass4(
     return call_llm_text(prompt, max_output_tokens=8000)
 
 
+# ---------------------------------------------------------------------------
+# Pass 5: suggested fully rewritten prompt
+# ---------------------------------------------------------------------------
+
+PASS5_PROMPT = """\
+You are a CTM Professional Services consultant. Rewrite a live VoiceAI agent's \
+instructions into one complete, ready-to-paste prompt that incorporates every \
+recommended change.
+
+You are given:
+1. The account's canonical caller topics from real phone call transcripts \
+(name, description, call_count, voice_ai_suitability, rationale).
+2. The agent's CURRENT live instructions.
+3. A "Recommended Prompt Updates" document describing coverage gaps and \
+prioritized changes.
+
+Produce ONLY the rewritten prompt. Output rules:
+- Output the prompt text by itself. No preamble, no explanation, no commentary, \
+and no surrounding markdown headings or code fences.
+- Keep the current instructions' voice, structure and formatting where they \
+already work; change only what the recommendations require.
+- Cover EVERY observed topic: the intents/phrases to recognize, what to \
+capture, what to say, and how to route (handle end-to-end, triage then \
+escalate, or escalate directly) consistent with each topic's suitability.
+- Preserve the escalation/guardrail behavior and anything the current prompt \
+already does well.
+- The result must be self-contained: a consultant can paste it over the current \
+instructions unchanged.
+- Do not use em dashes. Do not include names, phone numbers, emails, account \
+numbers, or any other PII.
+
+CURRENT_INSTRUCTIONS:
+{instructions}
+
+TOPICS_JSON:
+{topics_json}
+
+RECOMMENDATIONS:
+{recommendations}
+"""
+
+
+def _strip_code_fences(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_]*\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
+
+
+def run_pass5(
+    topics: list[dict], account_id: str, call_count: int, bot: dict, recommendations: str
+) -> str:
+    topics_json = {
+        "account_id": account_id,
+        "call_count": call_count,
+        "topic_count": len(topics),
+        "bot_name": bot.get("name", ""),
+        "topics": [
+            {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "call_count": t.get("call_count", 0),
+                "voice_ai_suitability": t.get("voice_ai_suitability", ""),
+                "rationale": t.get("rationale", ""),
+            }
+            for t in topics
+        ],
+    }
+    log.info(
+        "Pass 5: drafting a full rewritten prompt for agent '%s'",
+        bot.get("name") or bot.get("id"),
+    )
+    prompt = PASS5_PROMPT.format(
+        instructions=bot.get("instructions", ""),
+        topics_json=json.dumps(topics_json, ensure_ascii=False, indent=2),
+        recommendations=recommendations,
+    )
+    return _strip_code_fences(call_llm_text(prompt, max_output_tokens=8000))
+
+
 def run_pass2(pass1_items: list[dict]) -> list[dict]:
     payload = [
         {
@@ -998,6 +1079,7 @@ def build_html(artifacts: dict, output_path: Path) -> None:
     topics = artifacts.get("topics", []) or []
     call_rows = artifacts.get("call_rows", []) or []
     recommendations = artifacts.get("recommendations", []) or []
+    rewrites = artifacts.get("rewrites", []) or []
     bots = artifacts.get("bots", []) or []
     generated = artifacts.get("generated_instructions") or ""
     call_count = artifacts.get("call_count", 0)
@@ -1011,6 +1093,8 @@ def build_html(artifacts: dict, output_path: Path) -> None:
         toc.append('<a href="#current">Current agent prompt</a>')
     if recommendations:
         toc.append('<a href="#recommendations">Recommended updates</a>')
+    if rewrites:
+        toc.append('<a href="#rewrite">Suggested rewritten prompt</a>')
     if generated:
         toc.append('<a href="#generated">Generated instructions</a>')
 
@@ -1082,6 +1166,26 @@ def build_html(artifacts: dict, output_path: Path) -> None:
             '<section class="card" id="recommendations"><h2>Recommended prompt updates</h2>'
             '<div class="sub">Paste-ready changes grounded in the call topics above. '
             "Use the Copy button on each prompt block.</div>"
+            + "".join(blocks)
+            + "</section>"
+        )
+
+    if rewrites:
+        blocks = []
+        for r in rewrites:
+            prefix = ""
+            if len(rewrites) > 1:
+                prefix = f'<h3>{_escape(r.get("name") or r.get("id"))}</h3>'
+            blocks.append(
+                '<div class="botrewrite">' + prefix
+                + _code_block(r.get("text", ""), "Copy rewritten prompt")
+                + "</div>"
+            )
+        parts.append(
+            '<section class="card" id="rewrite"><h2>Suggested rewritten prompt</h2>'
+            '<div class="sub">A complete, self-contained rewrite of the current agent prompt that '
+            "incorporates all of the recommended changes above. Paste it over the current "
+            "instructions, or use it as a starting point.</div>"
             + "".join(blocks)
             + "</section>"
         )
@@ -1165,6 +1269,7 @@ def main() -> None:
     p.add_argument("--save-voice-bots", metavar="FILE", help="Save fetched VoiceAI agents (id/name/instructions) to this JSON file")
     p.add_argument("--skip-recommendations", action="store_true", help="Skip pass 4 (recommended prompt updates)")
     p.add_argument("--recommendations-out", metavar="FILE", help="Output path for pass 4 recommendations Markdown")
+    p.add_argument("--rewrite-out", metavar="FILE", help="Output path for the pass 5 suggested rewritten prompt")
     args = p.parse_args()
 
     env = load_env_file(args.env_file)
@@ -1247,6 +1352,7 @@ def main() -> None:
 
     # Pass 4: compare the observed topics against each agent's current live prompt.
     recommendations: list[dict] = []
+    rewrites: list[dict] = []
     selected_bots: list[dict] = []
     if not args.skip_recommendations:
         if args.voice_bots_cache:
@@ -1277,6 +1383,9 @@ def main() -> None:
                 sections.append(
                     f"\n\n<!-- voice_bot id={bot.get('id')} name={bot.get('name')!r} -->\n\n{recs}"
                 )
+                # Pass 5: a complete, paste-ready rewrite of the agent's prompt.
+                rewrite = redact_text(run_pass5(topics, args.account_id, call_count, bot, recs))
+                rewrites.append({"id": bot.get("id"), "name": bot.get("name"), "text": rewrite})
             header = (
                 f"# Voice AI Prompt Recommendations - Account {args.account_id}\n\n"
                 f"Generated {time.strftime('%Y-%m-%d %H:%M:%S')} from {call_count} analyzed calls. "
@@ -1287,6 +1396,19 @@ def main() -> None:
             )
             rec_out.write_text(header + "".join(sections), encoding="utf-8")
             log.info("Wrote prompt recommendations for %d agent(s) to %s", len(selected), rec_out)
+
+            if rewrites and args.rewrite_out:
+                rw_header = (
+                    f"# Suggested Rewritten Prompt - Account {args.account_id}\n\n"
+                    f"Generated {time.strftime('%Y-%m-%d %H:%M:%S')} from {call_count} analyzed calls. "
+                    f"Agents rewritten: {len(rewrites)}.\n"
+                )
+                rw_sections = [
+                    f"\n\n<!-- voice_bot id={r.get('id')} name={r.get('name')!r} -->\n\n{r.get('text', '')}"
+                    for r in rewrites
+                ]
+                Path(args.rewrite_out).write_text(rw_header + "".join(rw_sections), encoding="utf-8")
+                log.info("Wrote suggested rewritten prompt(s) to %s", args.rewrite_out)
 
     # Build the full report last so it can include the topic, call and prompt analysis.
     call_rows = [
@@ -1310,6 +1432,7 @@ def main() -> None:
             for b in selected_bots
         ],
         "recommendations": recommendations,
+        "rewrites": rewrites,
         "generated_instructions": generated_instructions,
     }
     build_html(artifacts, Path(args.out))
