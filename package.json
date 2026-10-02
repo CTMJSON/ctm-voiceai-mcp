@@ -1,0 +1,37 @@
+{
+  "name": "ctm-voiceai-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for CTM VoiceAI topic analysis and existing-agent prompt recommendations, with OAuth2 login.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Jason Smith <jason.smith@ctm.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ctmjson/ctm-voiceai-mcp.git"
+  },
+  "homepage": "https://github.com/ctmjson/ctm-voiceai-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/ctmjson/ctm-voiceai-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "calltrackingmetrics",
+    "voiceai",
+    "call-analysis",
+    "prompt-review"
+  ],
+  "bin": {
+    "ctm-voiceai-mcp": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node test/smoke.mjs && node test/sampling.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  }
+}

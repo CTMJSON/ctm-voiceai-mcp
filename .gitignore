@@ -1,0 +1,16 @@
+node_modules/
+out/
+runs/
+*.log
+.DS_Store
+
+# Local secrets / config - never commit these
+config.env
+.env
+*.env
+tokens.json
+device.json
+config/local.*
+
+# Keep the example config
+!config/config.env.example
