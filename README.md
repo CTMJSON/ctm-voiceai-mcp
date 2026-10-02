@@ -5,43 +5,49 @@
 > email **jason.smith@ctm.com**.
 
 An MCP server (and Claude/Codex/pi skill) that reviews a CallTrackingMetrics
-(CTM) account's **real call transcripts**, finds the caller topics a VoiceAI
-agent should handle, compares them against the account's **current live VoiceAI
-agent prompt**, and writes prioritized, paste-ready **recommended prompt
-updates** - all in one HTML report.
+(CTM) account's **real call transcripts** against its **live VoiceAI agent
+instructions** and produces prioritized, paste-ready prompt updates plus a fully
+rewritten prompt, rendered as a self-contained HTML report.
 
 Highlights:
 
-- **No API keys at all.** No CTM API key and no model API key. Login is CTM
-  OAuth2 (device flow), and the analysis runs on the model your MCP client is
-  already using, via MCP sampling.
-- Works with any MCP-capable client: Claude Desktop, Claude Code, Codex, pi, or
-  a local LLM agent.
-- **Read-only.** It never changes a live agent. Recommendations are proposals
-  for a human to review and apply.
+- **No API keys at all.** Login is CTM OAuth2 (device flow), and the analysis is
+  performed by your MCP assistant itself - there is no external LLM call and no
+  model API key.
+- **Data + renderer only.** The server authenticates with CTM, fetches the
+  agents and the call transcripts, and renders the final report. Your assistant
+  does the thinking.
+- **Read-only.** It never changes a live agent. Recommendations are proposals for
+  a human to review and apply.
+- Works with any MCP-capable client: Claude Desktop, Claude Code, Codex, pi, or a
+  local LLM agent.
 
-## What it produces
+## The flow
 
-For a given CTM account id, one run produces:
+1. **Authenticate** with CTM via OAuth device flow (`ctm_voiceai_auth_login`).
+2. **Get the VoiceAI agents and their instructions** (`ctm_voiceai_get_voice_bots`).
+3. **Get the call activities and transcriptions** (`ctm_voiceai_get_calls`), paging
+   through until done.
+4. **Your assistant compares** the transcripts against the instructions, call by call.
+5. **Your assistant assesses and writes recommendations**, including a full rewrite.
+6. **Write the report** (`ctm_voiceai_write_report`), which saves the files, renders
+   the HTML report, and opens it in your browser.
 
-1. **Topic analysis** - the recurring caller topics, ranked by volume, each with
-   a High/Medium/Low voice-AI suitability rating and example calls.
-2. **Call analysis** - the per-call topic extraction behind those topics.
-3. **Recommended prompt updates** - a Coverage Map of what the current agent
-   prompt handles well, partially, or not at all, plus prioritized,
+## What the HTML report contains
+
+1. **Topic analysis** - canonical caller topics ranked by volume, with a
+   High/Medium/Low voice-AI suitability rating and example calls.
+2. **Call analysis** - the per-call extraction behind those topics.
+3. **Current agent prompt** - the live instructions being reviewed.
+4. **Recommended prompt updates** - a Coverage Map plus prioritized,
    copy-paste-ready prompt snippets.
-4. **Suggested rewritten prompt** - a complete, self-contained rewrite of the
-   current agent prompt that folds in every recommended change, ready to paste
-   as-is.
-
-Everything lands in a single self-contained HTML report that opens in your
-browser automatically when the run finishes.
+5. **Suggested rewritten prompt** - a complete, self-contained rewrite with a Copy
+   button.
 
 ## Requirements
 
 - **Node.js 20+**
-- **Python 3.9+** with the `requests` package
-  (`python3 -m pip install requests`)
+- **Python 3.9+** (standard library only; used for HTML rendering)
 - Any MCP-capable client
 
 ## Quick start
@@ -86,59 +92,36 @@ args = ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js"]
 **Other MCP clients** - use the same stdio command:
 `node /ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js`.
 
-### 3. Log in to CTM (once)
+### 3. Run it
 
-In your client, ask it to run the `ctm_voiceai_auth_login` tool. It returns a
-short **code** and a **URL**:
+Ask your assistant:
 
-1. Open <https://app.calltrackingmetrics.com/accesscode>.
-2. Enter the code.
-3. Run `ctm_voiceai_auth_login` again (or wait) to finish.
+> Review the VoiceAI agent for account **&lt;account id&gt;**: analyze the calls,
+> compare them to the current agent prompt, recommend updates, and open the report.
 
-That is it. The server ships with a shared, public CTM OAuth **client id** (not
-a secret), so every user uses the same app. Authentication is still per-user:
-you must sign in with a valid CTM login, and you only get access to the accounts
-that login can see.
-
-### 4. Run an analysis
-
-Ask your client something like:
-
-> Analyze the VoiceAI instructions and calls for account **&lt;account id&gt;**
-> and recommend updates.
-
-The agent calls `ctm_voiceai_analyze`, which fetches the calls, builds the
-topics, compares them to the live agent prompt, and returns the results inline.
-The full HTML report opens in your browser when the run completes.
+The assistant walks the six steps above. It logs in to CTM if needed (you enter a
+short code in the browser), pulls the agents and transcripts, does the analysis,
+and finally writes and opens the HTML report.
 
 ## Tools
 
-| Tool | Purpose |
-|------|---------|
-| `ctm_voiceai_configured` | Config + login status (never reveals secrets) |
-| `ctm_voiceai_auth_login` | Start or resume the device-flow login |
-| `ctm_voiceai_auth_status` | Token state and expiry |
-| `ctm_voiceai_auth_logout` | Delete stored tokens |
-| `ctm_voiceai_auth_url` | Build a web-flow authorize URL |
-| `ctm_voiceai_auth_exchange` | Exchange a web-flow code for tokens |
-| `ctm_voiceai_list_voice_bots` | List VoiceAI agents on an account |
-| `ctm_voiceai_get_voice_bot` | Fetch one agent's full current prompt |
-| `ctm_voiceai_analyze` | **Start here.** Analyze calls, then review the prompt |
-| `ctm_voiceai_recommend_updates` | Re-run the prompt review from a prior `analyze` run |
-| `ctm_voiceai_run_status` | Poll a running job |
-| `ctm_voiceai_list_runs` | List recent runs |
+| Tool | Step | Purpose |
+|------|------|---------|
+| `ctm_voiceai_configured` | - | Config + login status (never reveals secrets) |
+| `ctm_voiceai_auth_login` | 1 | Start or resume the device-flow login |
+| `ctm_voiceai_auth_status` | 1 | Token state and expiry |
+| `ctm_voiceai_auth_logout` | 1 | Delete stored tokens |
+| `ctm_voiceai_auth_url` | 1 | Build a web-flow authorize URL |
+| `ctm_voiceai_auth_exchange` | 1 | Exchange a web-flow code for tokens |
+| `ctm_voiceai_get_voice_bots` | 2 | Get agents and their full current instructions |
+| `ctm_voiceai_get_calls` | 3 | One page of answered calls with transcriptions |
+| `ctm_voiceai_write_report` | 6 | Write files, render the HTML report, open it |
+| `ctm_voiceai_run_status` | - | Read a prior report's metadata |
+| `ctm_voiceai_list_runs` | - | List recent reports |
 
-`ctm_voiceai_analyze` waits for completion by default and returns the topics and
-the full recommendations **inline**, so a single call gives your agent everything
-to present in one reply. Before it starts, it verifies your CTM login with a
-lightweight call, so a missing or expired session fails fast with a clear message
-to run `ctm_voiceai_auth_login`. For very long runs, pass `wait: false` and poll
-`ctm_voiceai_run_status`.
-
-Prompt feedback is always grounded in the call analysis: `ctm_voiceai_analyze`
-analyzes the calls first and its output leads with the call-topic Coverage Map.
-`ctm_voiceai_recommend_updates` is only a cheap re-run shortcut and requires a
-`run_id` from a completed `analyze` run.
+Authentication is per-user: the server ships with a shared, public CTM OAuth
+client id (not a secret), but each user signs in with their own CTM login and only
+sees accounts that login can access.
 
 ## Configuration (optional)
 
@@ -150,69 +133,40 @@ The defaults work out of the box. To change them, create
 CTM_VOICEAI_OPEN_REPORT=1        # 0 disables auto-opening the HTML report
 CTM_VOICEAI_OUT_DIR=/custom/runs/dir
 PYTHON_BIN=python3
-
-# Fallback LLM for clients that do NOT support MCP sampling (for example the
-# Claude CLI). Any OpenAI-compatible endpoint works - hosted or local.
-# CTM_VOICEAI_LLM_BASE_URL=https://api.openai.com/v1
-# CTM_VOICEAI_LLM_API_KEY=sk-...
-# CTM_VOICEAI_LLM_MODEL=gpt-4o-mini
-# CTM_VOICEAI_LLM_BASE_URL=http://localhost:11434/v1
-# CTM_VOICEAI_LLM_MODEL=llama3.1
 ```
 
 Precedence: process environment, then `~/.config/ctm-voiceai/config.env`, then
 any file named by `CTM_VOICEAI_ENV_FILE`. **Never commit** `config.env` or the
 stored tokens.
 
-### Which model runs the analysis
-
-An MCP server is a separate process and cannot directly call your client's model,
-so it prefers **MCP sampling**: the server asks your MCP client to run each
-completion, which runs on whatever model that client is using. `ctm_voiceai_configured`
-reports `sampling_supported`.
-
-If your client does not support sampling (the Claude CLI currently does not),
-set the fallback endpoint variables above and the analysis uses that
-OpenAI-compatible API instead. Sampling is always preferred when available, so
-no key is needed for sampling-capable clients. Calls are analyzed in batches of
-100 by default, each one LLM request, and batches also stop at a total transcript
-size so they never overflow the model context.
-
 ## Output
 
-Runs are written to `~/.local/share/ctm-voiceai/runs/<account>-<timestamp>/`:
+Report runs are written to `~/.local/share/ctm-voiceai/runs/<account>-<timestamp>/`:
 
 ```
 voiceai_topic_analysis.html     the full report (opens automatically)
 recommended_prompt_updates.md   the recommendations as Markdown
 suggested_prompt_rewrite.md     the full rewritten agent prompt
+analysis_artifacts.json         the raw analysis passed to the renderer
 voiceai_topic_analysis.csv      ranked topics
-pass2_cache.json                canonical topics (re-run input)
-voice_bots.json                 captured current agent prompts
-pass1_cache.json                per-call topic extractions
-run.json / run.log              job state and engine log
+run.json / run.log              run metadata and renderer log
 ```
 
 ## Troubleshooting
 
-- **Sampling unsupported** - your MCP client does not advertise MCP sampling and
-  no fallback endpoint is configured. Set `CTM_VOICEAI_LLM_BASE_URL` and
-  `CTM_VOICEAI_LLM_MODEL` (plus `CTM_VOICEAI_LLM_API_KEY` if needed) to any
-  OpenAI-compatible endpoint, or use a client that supports sampling.
-- **"NO_AUTH" from a bot tool** - run `ctm_voiceai_auth_login` first.
+- **"NO_AUTH"** - run `ctm_voiceai_auth_login` to sign in.
 - **Login code expired** - device codes expire after about 25 minutes; just run
   `ctm_voiceai_auth_login` again for a new one.
+- **Report did not open** - set `CTM_VOICEAI_OPEN_REPORT=1` (default) or open the
+  `voiceai_topic_analysis.html` path returned by `ctm_voiceai_write_report`.
 - **Thin analysis** - accounts with few transcribed calls produce thin results.
   Check the reported call count before drawing conclusions.
-- **Want a fresh comparison after editing a prompt?** Use
-  `ctm_voiceai_recommend_updates` with the `run_id` of the prior `analyze` run;
-  it reuses the cached call topics and captured prompt.
 
 ## Scope
 
-Read-only against CTM (calls and voice-bot configuration). It never changes a
-live agent. All analysis happens locally; only the call topics and the current
-agent instructions are sent to the model.
+Read-only against CTM (calls and voice-bot configuration). It never changes a live
+agent. No data leaves your machine except the analysis you explicitly write into
+the report - there is no external LLM call.
 
 ## Support and feedback
 

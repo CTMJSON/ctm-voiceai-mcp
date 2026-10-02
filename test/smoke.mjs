@@ -64,10 +64,11 @@ const names = list.result.tools.map((t) => t.name);
 for (const expected of [
   "ctm_voiceai_configured",
   "ctm_voiceai_auth_login",
-  "ctm_voiceai_list_voice_bots",
-  "ctm_voiceai_analyze",
-  "ctm_voiceai_recommend_updates",
-  "ctm_voiceai_run_status"
+  "ctm_voiceai_get_voice_bots",
+  "ctm_voiceai_get_calls",
+  "ctm_voiceai_write_report",
+  "ctm_voiceai_run_status",
+  "ctm_voiceai_list_runs"
 ]) {
   assert.ok(names.includes(expected), `missing tool ${expected}`);
 }
@@ -79,8 +80,8 @@ assert.ok(payload.client_id_masked, "client id present");
 assert.ok(payload.auth, "auth block present");
 
 console.log(`OK - ${names.length} tools registered`);
-console.log(`configured.logged_in = ${payload.auth.logged_in}`);
-console.log(`configured.sampling_supported = ${payload.sampling_supported}`);
+console.log(`configured.auth.logged_in = ${payload.auth.logged_in}`);
+console.log(`configured.analysis_backend = ${payload.analysis_backend}`);
 
 child.kill("SIGTERM");
 process.exit(0);

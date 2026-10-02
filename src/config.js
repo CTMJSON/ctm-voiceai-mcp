@@ -5,7 +5,7 @@ import { exists, parseEnvFile, readText } from "./util.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
-export const ENGINE_PATH = path.join(PACKAGE_ROOT, "engine", "ctm_voiceai_topic_analysis.py");
+export const RENDER_PATH = path.join(PACKAGE_ROOT, "engine", "render_report.py");
 
 const DEFAULT_CLIENT_ID = "ROB1_WEfKqNL3HHwBG5FsniXDz_E2WYw_5J_L9LDuuQ";
 const DEFAULT_SCOPE = "profile activity reports";
@@ -55,11 +55,8 @@ export async function loadConfig() {
     clientId: get("CTM_OAUTH_CLIENT_ID") || DEFAULT_CLIENT_ID,
     scope: get("CTM_OAUTH_SCOPE") || DEFAULT_SCOPE,
     basicAuth: get("CTM_BASIC_AUTH"),
-    llmBaseUrl: get("CTM_VOICEAI_LLM_BASE_URL"),
-    llmApiKey: get("CTM_VOICEAI_LLM_API_KEY"),
-    llmModel: get("CTM_VOICEAI_LLM_MODEL"),
     pythonBin: get("PYTHON_BIN") || "python3",
-    enginePath: ENGINE_PATH,
+    renderPath: RENDER_PATH,
     outDir: get("CTM_VOICEAI_OUT_DIR") || p.runsDir,
     openBrowser: !["0", "false", "no", "off"].includes((get("CTM_VOICEAI_OPEN_BROWSER") || "true").toLowerCase()),
     openReport: !["0", "false", "no", "off"].includes((get("CTM_VOICEAI_OPEN_REPORT") || "true").toLowerCase()),
@@ -72,12 +69,11 @@ export function configuredSummary(config) {
   return {
     client_id: clientId,
     auth_priority: ["oauth bearer (CTM_BEARER_TOKEN / stored OAuth token)", "basic auth (CTM_BASIC_AUTH)"],
-    analysis_backend: "mcp-sampling when supported, else an OpenAI-compatible LLM endpoint",
-    llm_endpoint_configured: Boolean(config.llmBaseUrl && config.llmModel),
+    analysis_backend: "assistant-driven: the MCP host assistant performs the analysis (no LLM API or key)",
     open_browser_on_login: config.openBrowser,
     open_report_when_done: config.openReport,
     python_bin: config.pythonBin,
-    engine_path: config.enginePath,
+    renderer_path: config.renderPath,
     config_file: config.paths.configFile,
     extra_env_file: config.extraEnvFile || null,
     runs_dir: config.outDir

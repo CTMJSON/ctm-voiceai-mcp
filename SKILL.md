@@ -1,145 +1,110 @@
 ---
 name: ctm-voiceai-prompt-review
-description: Analyze a CallTrackingMetrics (CTM) account's real phone call transcripts to find the caller topics a VoiceAI agent should handle, then compare those topics against the account's current live VoiceAI agent instructions and produce a prioritized, paste-ready list of recommended prompt updates. Use when asked to review, QA, or improve a CTM VoiceAI agent or bot prompt, to find what a voice AI should handle, or to decide whether a bot's prompt matches the customer's actual call mix.
+description: Analyze a CallTrackingMetrics (CTM) account's real phone call transcripts, compare them against the account's live VoiceAI agent instructions, and produce prioritized, paste-ready prompt updates plus a fully rewritten prompt and a self-contained HTML report. Uses CTM OAuth2 login. The assistant performs the analysis itself, so no external LLM or API key is used. Use when asked to review, QA, or improve a CTM VoiceAI agent or bot prompt.
 license: Custom development - contact jason.smith@ctm.com for support
-compatibility: Requires the ctmVoiceAI MCP server (this project) and the Python engine it bundles (Python 3.9+, `requests`). Analysis runs on the host model via MCP sampling. Login uses CTM OAuth2 (device flow) so no CTM API key is required.
+compatibility: Requires the ctmVoiceAI MCP server (this project) and Python 3.9+ for the HTML renderer. Login uses CTM OAuth2 (device flow) so no CTM API key is required. No model API key is used; the assistant does the analysis.
 ---
 
 # CTM VoiceAI Prompt Review
 
-Analyzes an account's **actual transcribed calls**, clusters them into canonical
-caller topics with a voice-AI suitability rating, fetches the account's **current
-live VoiceAI agent instructions**, and writes **Recommended Prompt Updates** that
-map observed topics to concrete prompt changes.
+Reviews an account's **actual transcribed calls** against its **live VoiceAI agent
+instructions**, then writes recommendations and a full rewritten prompt into a
+self-contained HTML report.
 
-This runs through the `ctmVoiceAI` MCP server. All work happens locally; only the
-call topics and the current agent instructions are sent to the LLM for analysis.
+The MCP server only moves data: it authenticates with CTM, fetches the agents and
+the call transcripts, and renders the final report. **You (the assistant) do the
+analysis.** There is no external LLM call.
 
-## Rule: call analysis first, always
+## The flow
 
-Prompt feedback MUST be grounded in the account's call topics. Follow this order
-and do not skip or reorder it:
+Follow these steps in order.
 
-1. **Run `ctm_voiceai_analyze` first** for the account. It verifies the CTM login,
-   fetches and analyzes the calls, builds canonical topics, and only then compares
-   them to the agent prompt.
-2. **Wait for it to complete** (`ctm_voiceai_run_status` until `complete`), then
-   read `recommended_prompt_updates.md`.
-3. **Present the call topics / coverage map before any prompt recommendations.**
-   The deliverable already starts with a Coverage Map; keep that order in your reply.
+### 1. Authenticate with CTM (OAuth)
 
-Do NOT give prompt feedback from `ctm_voiceai_get_voice_bot` or
-`ctm_voiceai_list_voice_bots` alone, and do NOT call `ctm_voiceai_recommend_updates`
-for a first review. That tool only re-runs the comparison against call topics from a
-prior `ctm_voiceai_analyze` run and will error without one.
+Check first with `ctm_voiceai_auth_status`. If not logged in, run
+`ctm_voiceai_auth_login`. It returns a `user_code` and `verification_uri`; tell
+the user to open <https://app.calltrackingmetrics.com/accesscode> and enter the
+code, then call `ctm_voiceai_auth_login` again (or pass `wait_seconds`) to finish.
+Tokens are stored and refreshed automatically.
 
-If a user asks to "analyze the instructions and calls", the single correct action is
-`ctm_voiceai_analyze`. Do not analyze the prompt separately first.
+### 2. Get the VoiceAI agents and their instructions
 
-## Auth: OAuth2 device flow (no API key)
+`ctm_voiceai_get_voice_bots(account_id="<id>")` returns every agent that has
+instructions, with the full current prompt text. Optionally pass `voice_bot` (id
+or name substring) to focus on one agent.
 
-Tokens are stored at `~/.config/ctm-voiceai/tokens.json` and refreshed automatically.
-Do this once per session if not already logged in:
+### 3. Get the call activities and transcriptions
 
-1. `ctm_voiceai_auth_status` - check first.
-2. `ctm_voiceai_auth_login` - returns a `user_code` and `verification_uri`.
-   Tell the user to open `https://app.calltrackingmetrics.com/accesscode` and
-   enter the code, then call `ctm_voiceai_auth_login` again (or pass
-   `wait_seconds`) to finish. This is the OAuth app, not an API key.
-3. `ctm_voiceai_configured` - confirms login, sampling support, and paths.
+`ctm_voiceai_get_calls(account_id="<id>", page=1, per_page=25, direction="inbound")`
+performs one GET and returns a page of answered calls with transcriptions
+(`id`, `occurred_at`, `summary`, `transcript`). It also returns `has_more` and
+`next_page`.
 
-There is also a web flow: `ctm_voiceai_auth_url` builds the authorize URL, and
-`ctm_voiceai_auth_exchange` swaps the returned `?code=` for tokens.
+Page through the calls until `has_more` is false. Keep `per_page` small enough
+that the transcripts fit comfortably in context (25-40 is a good range).
 
-If OAuth is not set up yet, the server also honors `CTM_BASIC_AUTH` as a fallback.
+### 4. Compare the transcripts against the instructions
 
-## Which model runs the analysis
+Process one page at a time. For each call, extract:
 
-By default the analysis passes run on **the model this MCP client is using**, via
-MCP sampling: the server asks the client to run each completion. No API key is
-needed. `ctm_voiceai_configured` reports `sampling_supported`.
+- **topic**: a short label for what the caller wanted.
+- **description**: one line on the caller's need.
+- **voice_ai_suitable**: `yes`, `partial`, or `no`.
+- **reasoning**: why (scriptable, needs an integration, needs a human, etc.).
 
-If the client does not support sampling (the Claude CLI currently does not), set
-`CTM_VOICEAI_LLM_BASE_URL` and `CTM_VOICEAI_LLM_MODEL` (and `CTM_VOICEAI_LLM_API_KEY`
-if needed) in `~/.config/ctm-voiceai/config.env` to any OpenAI-compatible endpoint
-(hosted or a local model). Sampling is always preferred when available. Each
-extraction batch is one LLM request; batches default to 100 calls and are also
-bounded by total transcript size so they never overflow the model context.
+Then compare that against the agent instructions: which topics are already
+covered well, partially, or not at all.
 
-## Typical run
+### 5. Assess and make recommendations
 
-```
-ctm_voiceai_analyze(account_id="<account_id>")
-```
+Accumulate the per-call extractions across all pages, then synthesize:
 
-One call does everything and (by default) waits for completion. The result contains
-`call_context`, the `topics` list, `recommendations_markdown`, and
-`suggested_rewrite_markdown`. **Present all of it in a single reply** - the call
-topics / coverage first, then the recommended updates, finishing with the
-suggested rewritten prompt. Do not just return file paths, do not ask "would you
-like me to show the recommendations?", and do not make the user open the files.
-The HTML/CSV paths are available if they want them, but the answer should be in
-your message.
+- **Canonical topics** ranked by call volume, merging near-duplicates, each with
+  `name`, `description`, `call_count`, `voice_ai_suitability` (`High`/`Medium`/`Low`),
+  `rationale`, and up to 5 `example_call_ids`.
+- **Recommended Prompt Updates** Markdown per agent, with these sections:
+  - `# Recommended Prompt Updates` (one short intro paragraph)
+  - `## Coverage Map` - a table: Observed topic | Calls | Voice AI fit | Current
+    coverage (Good/Partial/None) | Gap. Cover every topic.
+  - `## Priority Changes` - highest-impact updates by call volume. For each: a bold
+    heading, the topics and call counts, why it matters, and a fenced code block of
+    PASTE-READY prompt text in the same voice as the current instructions.
+  - `## Secondary Changes` - lower-volume topics, shorter.
+  - `## What To Preserve` - mechanics in the current prompt that must not regress.
+  - `## Integration Dependencies` - flag anything that only works with live
+    calendar/dispatch/order/CRM access, and the capture-and-confirm fallback.
+- **A suggested fully rewritten prompt**: one complete, self-contained rewrite of
+  the agent's instructions that folds in every change and can be pasted as-is.
 
-If a run is started with `wait: false`, poll `ctm_voiceai_run_status`; the final
-poll also returns the topics and `recommendations_markdown`.
+Ground everything in the observed topics. Do not invent capabilities,
+integrations, or caller needs. Do not use em dashes.
 
-### Re-running after a prompt edit
+### 6. Write the report and open it
 
-When the agent prompt changes and you want a fresh comparison against the **same**
-call analysis, pass the prior run's `run_id` (it reuses that run's cached call
-topics and captured prompt). The result contains the recommendations inline.
+`ctm_voiceai_write_report(...)` writes the files, renders the HTML report, and
+opens it in the browser. Pass:
 
-```
-ctm_voiceai_recommend_updates(run_id="<run_id from a prior analyze>")
-```
+- `account_id`
+- `call_context: { call_count }` (the number of calls analyzed)
+- `topics` (the canonical topic list)
+- `call_rows` (optional per-call extractions: `id`, `occurred_at`, `topic`,
+  `voice_ai_suitable`, `description`, `reasoning`)
+- `bots` (the reviewed agents with their current `instructions`)
+- `recommendations` (`[{ id, name, markdown }]`)
+- `rewrites` (`[{ id, name, text }]`)
 
-## Outputs
+It returns `run_dir` and the written `files` (HTML, recommendations Markdown,
+rewrite Markdown, artifacts JSON, CSV).
 
-A run writes to `~/.local/share/ctm-voiceai/runs/<account>-<timestamp>/`:
+## Notes
 
-| File | What it is |
-|------|------------|
-| `recommended_prompt_updates.md` | The deliverable: coverage map + prioritized updates |
-| `suggested_prompt_rewrite.md` | A complete, paste-ready rewrite of the current agent prompt |
-| `voiceai_topic_analysis.html` | The full self-contained report: topic analysis, per-call analysis, current agent prompt, paste-ready recommended updates, and a suggested fully rewritten prompt with Copy buttons. This is the artifact to hand the customer. It opens automatically in the browser when the run finishes (disable with `CTM_VOICEAI_OPEN_REPORT=0`). |
-| `voiceai_topic_analysis.csv` | Canonical topics, call counts, suitabilities |
-| `pass2_cache.json` | Canonical topics (input to re-runs) |
-| `voice_bots.json` | The current agent instructions captured from CTM |
-| `pass1_cache.json` | Per-call topic extractions |
-| `voiceai_bot_instructions.md` | Optional brand-new instructions (only if not skipped) |
-```
+- Reads are safe and read-only. It never changes a live agent.
+- Redact names, phone numbers, emails, and account numbers from anything you
+  write into the report.
+- Accounts with few transcribed calls produce thin analyses. Report the call
+  count so the user can judge the sample.
+- If a user asks to "analyze the instructions and calls", run the whole flow
+  end to end and present the call topics first, then the recommendations, then
+  the rewritten prompt.
 
-## Inspecting agents
-
-- `ctm_voiceai_list_voice_bots(account_id="<account_id>")` - names, ids, instruction sizes.
-- `ctm_voiceai_get_voice_bot(account_id="<account_id>", name="<agent name>")` - read a prompt.
-
-These are for orientation only. Reading a prompt is NOT a review; always run
-`ctm_voiceai_analyze` before giving any feedback on an agent's instructions.
-Accounts usually have one bot; agency accounts can have many, so `voice_bot` on the
-analysis tools selects by id or name substring and defaults to all agents with prompts.
-
-## Reading the results
-
-- **Suitability** is `High` / `Medium` / `Low`. `High` means the observed calls are
-  simple and scriptable; `Medium` means a bot can triage but a human must finish;
-  `Low` means human judgement is needed (complaints, disputes, account work).
-- **Coverage** in the recommendations table is `Good` / `Partial` / `None` against
-  the current prompt. Lead with the largest `None`/`Partial` gaps.
-- Recommendations include paste-ready prompt snippets. They are proposals; present
-  them for human review before anyone pastes them into a live agent.
-- Treat `Integration Dependencies` as a warning: topics rated High (booking, status,
-  order changes) are only High if the bot has live calendar/order/dispatch access.
-  Without it, the prompt must capture-and-confirm and let the team finalise.
-
-## Scope boundary (be honest)
-
-- Uses **transcripts CTM has transcribed**. If an account has few transcribed calls,
-  say so rather than over-reading the sample.
-- Skips generating brand-new bot instructions by default; the goal is reviewing the
-  existing agent. Pass `skip_bot_instructions=false` to also draft fresh instructions.
-- The analysis model is whatever the MCP client provides (via MCP sampling). The
-  skill itself can be driven by any MCP-capable agent that supports sampling.
-
-See [README.md](README.md) for installation, registration, and configuration.
+See [README.md](README.md) for installation and configuration.

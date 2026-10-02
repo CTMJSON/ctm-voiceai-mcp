@@ -101,6 +101,78 @@ export async function fetchVoiceBots(accountId, authHeader, { perPage = 100 } = 
   return bots;
 }
 
+/** Pull transcript text out of the various shapes the CTM API can return. */
+export function extractTranscript(raw) {
+  for (const key of ["transcription_text", "transcription", "transcript", "transcript_text"]) {
+    const val = raw[key];
+    if (typeof val === "string" && val.trim()) return val.trim();
+    if (val && typeof val === "object") {
+      for (const sub of ["text", "transcript", "full_text", "content"]) {
+        if (typeof val[sub] === "string" && val[sub].trim()) return val[sub].trim();
+      }
+    }
+  }
+  const segments = raw.transcription_segments;
+  if (Array.isArray(segments)) {
+    const joined = segments
+      .filter((s) => s && typeof s === "object")
+      .map((s) => String(s.text || s.content || "").trim())
+      .filter(Boolean)
+      .join(" ");
+    if (joined) return joined;
+  }
+  return "";
+}
+
+/** Normalize a CTM call record into the compact shape the analysis uses. */
+export function normalizeCall(raw) {
+  return {
+    id: raw.id,
+    occurred_at: raw.called_at || raw.occurred_at || raw.created_at || raw.started_at || null,
+    direction: raw.direction || null,
+    summary: raw.summary || "",
+    transcript: extractTranscript(raw)
+  };
+}
+
+/**
+ * One GET against the CTM calls endpoint, returning a page of activities with
+ * transcriptions.
+ */
+export async function fetchCallsPage(accountId, authHeader, {
+  page = 1,
+  perPage = 25,
+  since,
+  until,
+  direction,
+  hasTranscription = true
+} = {}) {
+  const params = new URLSearchParams();
+  params.set("per_page", String(perPage));
+  params.set("page", String(page));
+  params.set("format", "json");
+  params.set("call_status", "answered");
+  if (hasTranscription) params.set("has_transcription", "1");
+  if (direction && direction !== "none") params.set("direction", direction);
+  if (since) params.set("since", since);
+  if (until) params.set("until", until);
+
+  const url = `${API_BASE}/accounts/${accountId}/calls?${params.toString()}`;
+  const data = await getJson(url, authHeader, { timeoutMs: 60000 });
+  const rawCalls = Array.isArray(data.calls) ? data.calls : [];
+  const calls = rawCalls.map(normalizeCall).filter((c) => c.transcript);
+  return {
+    page,
+    per_page: perPage,
+    returned: rawCalls.length,
+    with_transcript: calls.length,
+    total: data.total ?? null,
+    has_more: Boolean(data.next_page),
+    next_page: data.next_page ? page + 1 : null,
+    calls
+  };
+}
+
 export function selectBots(bots, selectors) {
   if (!selectors || selectors.length === 0) return bots.filter((b) => b.instructions);
   const chosen = [];

@@ -16,9 +16,8 @@ import {
   tokenState,
   waitForDeviceFlow
 } from "./oauth.js";
-import { fetchVoiceBots, resolveAuthHeader, selectBots, verifyAuth } from "./ctm.js";
-import { listRuns, loadRun, readRunArtifacts, readTopics, runStatus, startAnalyze, startRecommend, summarizeTopicsFile } from "./engine.js";
-import { clientSupportsSampling, startSamplingBridge } from "./llmBridge.js";
+import { fetchCallsPage, fetchVoiceBots, resolveAuthHeader, selectBots, verifyAuth } from "./ctm.js";
+import { listRuns, loadRun, runStatus, writeReport } from "./engine.js";
 
 const config = await loadConfig();
 const server = new McpServer({ name: "ctm-voiceai", version: "0.1.0" });
@@ -51,23 +50,6 @@ function safeTool(fn) {
   };
 }
 
-/** Choose the analysis LLM: the MCP host model via sampling, or a configured endpoint. */
-async function llmBridgeFor() {
-  if (clientSupportsSampling(server)) {
-    const bridge = await startSamplingBridge(server);
-    return { bridge, backend: "sampling" };
-  }
-  if (config.llmBaseUrl && config.llmModel) {
-    return { bridge: null, backend: "http" };
-  }
-  throw new Error(
-    "This MCP client does not support MCP sampling, and no fallback LLM endpoint is configured. "
-      + "Set CTM_VOICEAI_LLM_BASE_URL and CTM_VOICEAI_LLM_MODEL (and CTM_VOICEAI_LLM_API_KEY "
-      + "if needed) in ~/.config/ctm-voiceai/config.env to any OpenAI-compatible endpoint, or "
-      + "use a client that supports sampling."
-  );
-}
-
 function authSummary(state) {
   if (!state.logged_in) {
     return {
@@ -94,7 +76,7 @@ server.registerTool(
   {
     title: "VoiceAI MCP Configuration",
     description:
-      "Shows configured CTM VoiceAI settings: OAuth client id, login state, sampling support, the Python engine path, and where analysis runs are written. Never reveals secrets.",
+      "Shows configured CTM VoiceAI settings: OAuth client id, login state, the report renderer path, and where analysis runs are written. Never reveals secrets.",
     inputSchema: {},
     annotations: { readOnlyHint: true }
   },
@@ -103,7 +85,6 @@ server.registerTool(
     return {
       ...configuredSummary(config),
       client_id_masked: mask(config.clientId),
-      sampling_supported: clientSupportsSampling(server),
       auth: authSummary(state)
     };
   })
@@ -258,54 +239,25 @@ async function authHeader(accountId) {
 }
 
 server.registerTool(
-  "ctm_voiceai_list_voice_bots",
+  "ctm_voiceai_get_voice_bots",
   {
-    title: "List VoiceAI Agents",
+    title: "Get VoiceAI Agents And Instructions",
     description:
-      "Lists the CTM VoiceAI agents configured on an account, with instruction length so you can see which have prompts. Uses OAuth if logged in, otherwise basic auth. Orientation only: this is not a review. To review an agent's prompt, run ctm_voiceai_analyze first so the feedback is grounded in the calls.",
-    inputSchema: { account_id: z.string().describe("CTM sub-account id.") },
-    annotations: { readOnlyHint: true }
-  },
-  safeTool(async ({ account_id }) => {
-    const auth = await authHeader(account_id);
-    const bots = await fetchVoiceBots(account_id, auth.header);
-    return {
-      account_id,
-      auth_mode: auth.mode,
-      count: bots.length,
-      voice_bots: bots.map((b) => ({
-        id: b.id,
-        name: b.name,
-        description: b.description,
-        instructions_chars: b.instructions.length,
-        has_instructions: Boolean(b.instructions),
-        play_message: b.play_message
-      }))
-    };
-  })
-);
-
-server.registerTool(
-  "ctm_voiceai_get_voice_bot",
-  {
-    title: "Get VoiceAI Agent",
-    description:
-      "Returns one VoiceAI agent's full current instructions (matched by id or name substring). Orientation only: do NOT write prompt feedback from this alone. Run ctm_voiceai_analyze first, which analyzes the account's calls and then compares them against these instructions.",
+      "Step 2 of the review flow: returns the account's VoiceAI agents and their full current instructions. Optionally filter to one agent by id or name substring. The assistant compares these instructions against the transcripts from ctm_voiceai_get_calls.",
     inputSchema: {
       account_id: z.string().describe("CTM sub-account id."),
-      bot_id: z.string().optional().describe("Exact agent id."),
-      name: z.string().optional().describe("Name substring, if id is not known.")
+      voice_bot: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe("Optional agent id or name substring. Default: every agent that has instructions.")
     },
     annotations: { readOnlyHint: true }
   },
-  safeTool(async ({ account_id, bot_id, name }) => {
+  safeTool(async ({ account_id, voice_bot }) => {
     const auth = await authHeader(account_id);
     const bots = await fetchVoiceBots(account_id, auth.header);
-    const selector = bot_id || name;
-    const selected = selector
-      ? selectBots(bots, [selector])
-      : bots.filter((b) => b.instructions);
-    if (selected.length === 0) throw new Error("No matching VoiceAI agent with instructions found.");
+    const selectors = [].concat(voice_bot || []);
+    const selected = selectors.length ? selectBots(bots, selectors) : bots.filter((b) => b.instructions);
     return {
       account_id,
       auth_mode: auth.mode,
@@ -313,6 +265,7 @@ server.registerTool(
       voice_bots: selected.map((b) => ({
         id: b.id,
         name: b.name,
+        description: b.description,
         play_message: b.play_message,
         instructions: b.instructions
       }))
@@ -321,186 +274,145 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
-// Analysis
+// Calls and reporting
 // ---------------------------------------------------------------------------
 
-const analyzeSchema = {
-  account_id: z.string().describe("CTM sub-account id to analyze."),
-  target: z.number().int().min(1).max(2000).optional().describe("Transcribed calls to analyze. Default 500."),
-  since: z.string().optional().describe("Start date YYYY-MM-DD."),
-  until: z.string().optional().describe("End date YYYY-MM-DD."),
-  direction: z.enum(["inbound", "outbound", "none"]).optional().describe("Default inbound."),
-  batch_size: z
-    .number()
-    .int()
-    .min(10)
-    .max(200)
-    .optional()
-    .describe(
-      "Max calls per extraction batch (default 100, aligned with the CTM page size). Batches are also bounded by total transcript size so they never overflow the model context. Each batch is one host-model sampling request, so larger batches mean fewer requests."
-    ),
-  voice_bot: z
-    .union([z.string(), z.array(z.string())])
-    .optional()
-    .describe("VoiceAI agent id or name substring to review. Default: all agents with instructions."),
-  out_dir: z.string().optional().describe("Override the output directory for this run."),
-  skip_bot_instructions: z
-    .boolean()
-    .optional()
-    .describe("Skip generating brand-new bot instructions (pass 3). Default true."),
-  wait: z
-    .boolean()
-    .optional()
-    .describe("If true (default), wait for completion and return the topic list and full recommendations inline. Set false to return immediately with a run_id.")
-};
-
 server.registerTool(
-  "ctm_voiceai_analyze",
+  "ctm_voiceai_get_calls",
   {
-    title: "Analyze Calls, Then Review Agent Prompt (run this first)",
+    title: "Get Call Activities And Transcriptions",
     description:
-      "The correct entry point for reviewing a VoiceAI agent: fetches the account's transcribed calls, extracts and synthesizes caller topics FIRST, then compares those topics against the account's current agent instructions and writes recommended prompt updates plus HTML/CSV topic reports. Always use this before giving any prompt feedback, so the feedback is grounded in the calls. When complete, the result includes the topic list, the full recommendations, and a suggested fully rewritten prompt (suggested_rewrite_markdown), so present them in one reply (call topics first, then recommendations, then the rewritten prompt) without asking whether to show them or making the user open files. Waits for completion by default. Returns a run id as well; poll ctm_voiceai_run_status if needed.",
-    inputSchema: analyzeSchema,
-    annotations: { openWorldHint: true }
+      "Step 3 of the review flow: one GET against the CTM calls endpoint returning a page of answered calls with transcriptions. Call repeatedly, increasing page, until has_more is false. Returns id, date, summary and transcript (truncated to max_transcript_chars) for each call.",
+    inputSchema: {
+      account_id: z.string().describe("CTM sub-account id."),
+      page: z.number().int().min(1).optional().describe("Page number, starting at 1. Default 1."),
+      per_page: z.number().int().min(1).max(100).optional().describe("Calls per page. Default 25; keep it small so the transcripts fit in context."),
+      since: z.string().optional().describe("Start date YYYY-MM-DD."),
+      until: z.string().optional().describe("End date YYYY-MM-DD."),
+      direction: z.enum(["inbound", "outbound", "none"]).optional().describe("Default inbound."),
+      max_transcript_chars: z.number().int().min(200).max(20000).optional().describe("Truncate each transcript to this many characters. Default 4000."),
+      has_transcription: z.boolean().optional().describe("Only calls with a transcription. Default true.")
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true }
   },
   safeTool(async (args) => {
-    // Fail fast with a clear, actionable message when the CTM login is missing or expired.
-    await verifyAuth(config, args.account_id);
-    const { bridge, backend } = await llmBridgeFor();
-    let result;
-    try {
-      const skipBotInstructions = args.skip_bot_instructions ?? true;
-      const { runId, record, pending } = await startAnalyze(config, {
-        accountId: args.account_id,
-        target: args.target ?? 500,
-        since: args.since,
-        until: args.until,
-        direction: args.direction || "inbound",
-        batchSize: args.batch_size,
-        voiceBot: args.voice_bot,
-        outDir: args.out_dir,
-        skipBotInstructions,
-        llmBridge: bridge,
-        wait: args.wait ?? true
-      });
-      result = {
-        run_id: runId,
-        status: record.status,
-        pending: Boolean(pending),
-        run_dir: record.run_dir,
-        auth_mode: record.auth_mode,
-        llm_backend: backend,
-        message: pending
-          ? "Run started. Poll ctm_voiceai_run_status with this run_id."
-          : `Run finished with status ${record.status}.`,
-        files: record.files
-      };
-      if (!pending && record.status === "complete") {
-        Object.assign(result, await readRunArtifacts(record));
-        if (record.files?.pass2_cache) {
-          result.call_context = { ...(result.call_context || {}), topics_file: record.files.pass2_cache };
-        }
-      }
-    } catch (err) {
-      if (bridge) await bridge.close().catch(() => {});
-      throw err;
-    }
-    return result;
+    const auth = await authHeader(args.account_id);
+    const page = await fetchCallsPage(args.account_id, auth.header, {
+      page: args.page ?? 1,
+      perPage: args.per_page ?? 25,
+      since: args.since,
+      until: args.until,
+      direction: args.direction || "inbound",
+      hasTranscription: args.has_transcription ?? true
+    });
+    const maxChars = args.max_transcript_chars ?? 4000;
+    const calls = page.calls.map((c) => ({
+      ...c,
+      transcript: c.transcript.length > maxChars ? `${c.transcript.slice(0, maxChars)}...` : c.transcript
+    }));
+    return {
+      account_id: args.account_id,
+      auth_mode: auth.mode,
+      page: page.page,
+      per_page: page.per_page,
+      returned: page.returned,
+      with_transcript: page.with_transcript,
+      has_more: page.has_more,
+      next_page: page.next_page,
+      calls
+    };
   })
 );
 
 server.registerTool(
-  "ctm_voiceai_recommend_updates",
+  "ctm_voiceai_write_report",
   {
-    title: "Re-run Prompt Review From a Prior Call Analysis",
+    title: "Write Report And Open HTML",
     description:
-      "ADVANCED / re-run only. Regenerates prompt recommendations using the call topics already captured by a completed ctm_voiceai_analyze run (identified by run_id). Use this only after the agent prompt changed and you want a fresh comparison against the SAME call analysis; it does NOT fetch calls. For a first review, call ctm_voiceai_analyze instead. Errors if the run has no call-topic analysis. Returns the recommendations inline on completion, plus a suggested fully rewritten prompt (suggested_rewrite_markdown).",
+      "Step 6 of the review flow: takes the analysis the assistant produced, writes it to files, renders the self-contained HTML report, and opens it in the browser. Pass the canonical topics, an optional per-call table, the reviewed agents with their current instructions, the recommendations Markdown, and the suggested fully rewritten prompt.",
     inputSchema: {
-      run_id: z
-        .string()
-        .describe("run_id from a COMPLETED ctm_voiceai_analyze run. Its call topics and captured agent prompt are reused."),
-      account_id: z.string().optional().describe("Defaults to the account of the referenced run."),
-      voice_bot: z.union([z.string(), z.array(z.string())]).optional(),
-      out_dir: z.string().optional(),
-      wait: z.boolean().optional().describe("If true (default), wait and return the recommendations inline. Set false to return a run_id immediately."),
-      topics_file: z.string().optional().describe("Advanced override. Must be a pass2 topics JSON from a call analysis."),
-      bots_file: z.string().optional().describe("Advanced override. Must be a voice_bots JSON.")
+      account_id: z.string().describe("CTM sub-account id."),
+      call_context: z
+        .object({ call_count: z.number().optional() })
+        .optional()
+        .describe("Optional context, e.g. { call_count: 500 }."),
+      topics: z
+        .array(
+          z.object({
+            name: z.string(),
+            description: z.string().optional(),
+            call_count: z.number().optional(),
+            voice_ai_suitability: z.enum(["High", "Medium", "Low"]).optional(),
+            rationale: z.string().optional(),
+            example_call_ids: z.array(z.union([z.number(), z.string()])).optional()
+          })
+        )
+        .describe("Canonical topics synthesized from the calls."),
+      call_rows: z
+        .array(
+          z.object({
+            id: z.union([z.number(), z.string()]).optional(),
+            occurred_at: z.string().optional(),
+            topic: z.string().optional(),
+            voice_ai_suitable: z.string().optional(),
+            description: z.string().optional(),
+            reasoning: z.string().optional()
+          })
+        )
+        .optional()
+        .describe("Optional per-call extraction rows."),
+      bots: z
+        .array(z.object({ id: z.string().optional(), name: z.string().optional(), instructions: z.string().optional() }))
+        .optional()
+        .describe("The reviewed agents and their current instructions."),
+      recommendations: z
+        .array(
+          z.object({
+            id: z.string().optional(),
+            name: z.string().optional(),
+            markdown: z.string().describe("The Recommended Prompt Updates Markdown for this agent.")
+          })
+        )
+        .optional(),
+      rewrites: z
+        .array(
+          z.object({
+            id: z.string().optional(),
+            name: z.string().optional(),
+            text: z.string().describe("The full rewritten agent prompt for this agent.")
+          })
+        )
+        .optional(),
+      open: z.boolean().optional().describe("Open the report in the browser. Default true."),
+      out_dir: z.string().optional()
     },
-    annotations: { openWorldHint: true }
+    annotations: { openWorldHint: true, destructiveHint: false }
   },
   safeTool(async (args) => {
-    let topicsFile = args.topics_file || null;
-    let botsFile = args.bots_file || null;
-    let accountId = args.account_id || null;
-    let sourceRun = null;
-
-    if (args.run_id) {
-      const { state } = await loadRun(config, args.run_id, args.out_dir);
-      if (!state) throw new Error(`Run ${args.run_id} not found. Run ctm_voiceai_analyze first.`);
-      if (state.mode !== "analyze") {
-        throw new Error(
-          `Run ${args.run_id} is a '${state.mode}' run with no call analysis. Run ctm_voiceai_analyze first.`
-        );
-      }
-      if (state.status !== "complete") {
-        throw new Error(`Run ${args.run_id} is ${state.status}. Wait for it to complete, then retry.`);
-      }
-      topicsFile = topicsFile || state.files?.pass2_cache;
-      botsFile = botsFile || state.files?.voice_bots;
-      accountId = accountId || state.account_id;
-      sourceRun = args.run_id;
-    }
-
-    if (!topicsFile || !botsFile) {
-      throw new Error(
-        "Prompt review needs call context first. Run ctm_voiceai_analyze for the account, then pass its run_id here (or provide both topics_file and bots_file)."
-      );
-    }
-
-    const ctx = await summarizeTopicsFile(topicsFile);
-    if (!ctx || !ctx.topic_count) {
-      throw new Error(
-        `No call topics found in ${topicsFile}. Run ctm_voiceai_analyze to analyze the calls before reviewing the prompt.`
-      );
-    }
-    const resolvedAccount = accountId || "unknown";
-
-    const { bridge, backend } = await llmBridgeFor();
-    let result;
-    try {
-      const { runId, record, pending } = await startRecommend(config, {
-        accountId: resolvedAccount,
-        topicsFile,
-        botsFile,
-        voiceBot: args.voice_bot,
-        outDir: args.out_dir,
-        llmBridge: bridge,
-        wait: args.wait ?? true
-      });
-      result = {
-        run_id: runId,
-        status: record.status,
-        pending: Boolean(pending),
-        run_dir: record.run_dir,
-        llm_backend: backend,
-        call_context: { ...ctx, topics_file: topicsFile, source_run_id: sourceRun },
-        message: pending ? "Run started. Poll ctm_voiceai_run_status." : `Run finished with status ${record.status}.`,
-        files: record.files
-      };
-      if (!pending && record.status === "complete") {
-        Object.assign(result, await readRunArtifacts(record));
-        result.topics = await readTopics(topicsFile);
-        result.call_context = {
-          ...(result.call_context || {}),
-          topics_file: topicsFile,
-          source_run_id: sourceRun
-        };
-      }
-    } catch (err) {
-      if (bridge) await bridge.close().catch(() => {});
-      throw err;
-    }
-    return result;
+    const artifacts = {
+      account_id: args.account_id,
+      call_count: args.call_context?.call_count ?? args.topics.reduce((sum, t) => sum + (t.call_count || 0), 0),
+      topics: args.topics || [],
+      call_rows: args.call_rows || [],
+      bots: args.bots || [],
+      recommendations: args.recommendations || [],
+      rewrites: args.rewrites || [],
+      generated_instructions: ""
+    };
+    const record = await writeReport(config, {
+      accountId: args.account_id,
+      artifacts,
+      open: args.open ?? true,
+      outDir: args.out_dir
+    });
+    return {
+      run_id: record.run_id,
+      status: record.status,
+      run_dir: record.run_dir,
+      html_opened: record.status === "complete" && (args.open ?? true),
+      files: record.files,
+      error: record.error || null
+    };
   })
 );
 
@@ -511,7 +423,7 @@ server.registerTool(
     description:
       "Returns the status of an analysis run (running/complete/error), its output file paths, and the tail of the log when still running or failed. When complete, read recommended_prompt_updates to see the recommendations.",
     inputSchema: {
-      run_id: z.string().describe("Run id returned by ctm_voiceai_analyze or ctm_voiceai_recommend_updates."),
+      run_id: z.string().describe("Run id returned by ctm_voiceai_write_report."),
       out_dir: z.string().optional()
     },
     annotations: { readOnlyHint: true }
