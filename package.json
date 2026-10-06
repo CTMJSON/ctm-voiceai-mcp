@@ -1,6 +1,6 @@
 {
   "name": "ctm-voiceai-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that pulls CTM call transcripts and VoiceAI agent instructions so your assistant can review them and render a prompt-update HTML report, with OAuth2 login. No LLM API or key.",
   "type": "module",
   "license": "MIT",
@@ -21,11 +21,15 @@
     "prompt-review"
   ],
   "bin": {
-    "ctm-voiceai-mcp": "./src/index.js"
+    "ctm-voiceai-mcp": "./dist/index.js"
   },
   "scripts": {
-    "start": "node src/index.js",
-    "test": "node test/sanitize.mjs && node test/smoke.mjs && node test/render.mjs"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/index.js",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test test/auth.mjs && node test/sanitize.mjs && node test/smoke.mjs && node test/render.mjs",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=20"
@@ -33,5 +37,17 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.0"
-  }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  },
+  "files": [
+    "dist/",
+    "engine/",
+    "config/*.example",
+    "config/*.json",
+    "config/*.toml",
+    "SKILL.md"
+  ]
 }

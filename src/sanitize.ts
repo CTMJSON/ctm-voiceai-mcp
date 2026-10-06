@@ -1,3 +1,4 @@
+import { artifactsSchema, type Artifacts } from "./types.js";
 // PII scrubbing for the report. Mirrors the original engine's redaction:
 // emails and phone numbers are redacted, and 2-3 word proper names are replaced
 // with placeholders. Markdown structure (headings, tables, bold labels, code)
@@ -41,12 +42,14 @@ const PLACEHOLDER_NAMES = [
   "Chris Lee", "Taylor Brown", "Sam Patel", "Jordan Kim"
 ];
 
-export function redactText(text) {
+export function redactText(text: string): string;
+export function redactText(text: string | undefined): string | undefined;
+export function redactText(text: string | undefined) {
   if (!text || typeof text !== "string") return text;
   return text.replace(EMAIL_RE, "[REDACTED_EMAIL]").replace(PHONE_RE, "[REDACTED_PHONE]");
 }
 
-function isNameToken(token) {
+function isNameToken(token: string) {
   if (!token || NAME_STOPWORDS.has(token) || token === token.toUpperCase()) return false;
   return token[0] === token[0].toUpperCase() && token[0] !== token[0].toLowerCase()
     && token.slice(1) === token.slice(1).toLowerCase();
@@ -55,14 +58,16 @@ function isNameToken(token) {
 const NAME_RE = /\b([A-Z][a-z]+)\s+([A-Z][a-z]+)(?:\s+([A-Z][a-z]+))?\b/g;
 
 export function makeNameState() {
-  return { map: new Map(), counter: 0 };
+  return { map: new Map<string, string>(), counter: 0 };
 }
 
 /** Replace detected two- or three-word proper names with placeholder names. */
-export function sanitizeNames(text, state = makeNameState()) {
+export function sanitizeNames(text: string, state?: NameState): string;
+export function sanitizeNames(text: string | undefined, state?: NameState): string | undefined;
+export function sanitizeNames(text: string | undefined, state = makeNameState()) {
   if (!text || typeof text !== "string") return text;
-  return text.replace(NAME_RE, (match, a, b, c) => {
-    const tokens = [a, b, c].filter(Boolean);
+  return text.replace(NAME_RE, (match: string, a: string, b: string, c: string | undefined) => {
+    const tokens = [a, b, c].filter((v): v is string => Boolean(v));
     // Prefer the longest run of name-like tokens; skip any run containing a
     // stopword so topic phrases like "Existing Customer Warranty" survive.
     for (let n = tokens.length; n >= 2; n--) {
@@ -74,20 +79,20 @@ export function sanitizeNames(text, state = makeNameState()) {
           state.counter += 1;
         }
         const rest = tokens.slice(n).join(" ");
-        return rest ? `${state.map.get(full)} ${rest}` : state.map.get(full);
+        return rest ? `${state.map.get(full)} ${rest}` : state.map.get(full) ?? full;
       }
     }
     return match;
   });
 }
 
-function sanitizeLine(line, state) {
+function sanitizeLine(line: string, state: NameState) {
   // Protect Markdown headings and table separator rows entirely.
   if (/^\s{0,3}#{1,6}\s/.test(line)) return redactText(line);
   if (/^\s*\|?\s*:?-{2,}/.test(line)) return redactText(line);
 
-  const spans = [];
-  const stash = (value) => {
+  const spans: string[] = [];
+  const stash = (value: string) => {
     spans.push(value);
     return `\u0000${spans.length - 1}\u0000`;
   };
@@ -105,7 +110,9 @@ function sanitizeLine(line, state) {
 }
 
 /** Sanitize a Markdown blob: protect fenced code blocks and per-line structure. */
-export function sanitizeMarkdown(text, state = makeNameState()) {
+export function sanitizeMarkdown(text: string, state?: NameState): string;
+export function sanitizeMarkdown(text: string | undefined, state?: NameState): string | undefined;
+export function sanitizeMarkdown(text: string | undefined, state = makeNameState()) {
   if (!text || typeof text !== "string") return text;
   const parts = text.split(/(```[\s\S]*?```)/g);
   return parts
@@ -117,14 +124,15 @@ export function sanitizeMarkdown(text, state = makeNameState()) {
 }
 
 /** Sanitize every free-text field of an analysis artifact object. */
-export function sanitizeArtifacts(artifacts) {
+export function sanitizeArtifacts(input: unknown): Artifacts {
+  const artifacts = artifactsSchema.parse(input);
   const state = makeNameState();
-  const scrub = (value) => sanitizeNames(redactText(value), state);
-  const markdown = (value) => sanitizeMarkdown(value, state);
+  const scrub = (value: string | undefined) => sanitizeNames(redactText(value), state);
+  const markdown = (value: string) => sanitizeMarkdown(value, state);
 
   const topics = (artifacts.topics || []).map((t) => ({
     ...t,
-    name: scrub(t.name),
+    name: sanitizeNames(redactText(t.name), state),
     description: scrub(t.description),
     rationale: scrub(t.rationale)
   }));
@@ -163,3 +171,4 @@ export function sanitizeArtifacts(artifacts) {
 }
 
 export const _internals = { isNameToken, NAME_STOPWORDS, PLACEHOLDER_NAMES };
+type NameState = ReturnType<typeof makeNameState>;

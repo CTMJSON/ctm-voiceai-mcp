@@ -9,16 +9,21 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const serverPath = path.join(here, "..", "src", "index.js");
+const serverPath = path.join(here, "..", "dist", "index.js");
 
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voiceai-render-"));
 const child = spawn(process.execPath, [serverPath], {
   stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
+    XDG_CONFIG_HOME: testRoot, XDG_DATA_HOME: testRoot,
+    CTM_OAUTH_CLIENT_ID: "fixture-public-client",
     CTM_VOICEAI_ENV_FILE: "/nonexistent-voiceai-env",
     CTM_VOICEAI_OPEN_REPORT: "0"
   }
 });
+
+process.on("exit", () => { child.kill("SIGTERM"); fs.rmSync(testRoot, { recursive: true, force: true }); });
 
 let buffer = "";
 const pending = new Map();
@@ -67,7 +72,7 @@ const init = await rpc("initialize", {
 assert.equal(init.result?.serverInfo?.name, "ctm-voiceai");
 notify("notifications/initialized", {});
 
-const outDir = path.join(os.tmpdir(), `ctm-voiceai-render-${Date.now()}`);
+const outDir = path.join(testRoot, "reports");
 
 const call = await rpc("tools/call", {
   name: "ctm_voiceai_write_report",

@@ -2,7 +2,7 @@
   "mcpServers": {
     "ctmVoiceAI": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js"]
+      "args": ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/dist/index.js"]
     }
   }
 }

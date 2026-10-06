@@ -7,7 +7,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
 export const RENDER_PATH = path.join(PACKAGE_ROOT, "engine", "render_report.py");
 
-const DEFAULT_CLIENT_ID = "ROB1_WEfKqNL3HHwBG5FsniXDz_E2WYw_5J_L9LDuuQ";
+
 const DEFAULT_SCOPE = "profile activity reports";
 
 function extraEnvFile() {
@@ -31,6 +31,7 @@ export function paths() {
     configFile: path.join(cfg, "config.env"),
     tokensFile: path.join(cfg, "tokens.json"),
     deviceFile: path.join(cfg, "device.json"),
+    pkceFile: path.join(cfg, "pkce.json"),
     runsDir: process.env.CTM_VOICEAI_OUT_DIR || path.join(dataDir(), "runs")
   };
 }
@@ -38,23 +39,23 @@ export function paths() {
 /** Load config: process.env wins over ~/.config/ctm-voiceai/config.env, then any CTM_VOICEAI_ENV_FILE. */
 export async function loadConfig() {
   const p = paths();
-  let fileEnv = {};
+  let fileEnv: Record<string, string> = {};
   if (await exists(p.configFile)) {
     fileEnv = parseEnvFile(await readText(p.configFile, ""));
   }
-  let extraEnv = {};
+  let extraEnv: Record<string, string> = {};
   const extra = extraEnvFile();
   if (extra && (await exists(extra))) {
     extraEnv = parseEnvFile(await readText(extra, ""));
   }
 
-  const get = (key) => process.env[key] || fileEnv[key] || extraEnv[key] || "";
+  const get = (key: string) => process.env[key] || fileEnv[key] || extraEnv[key] || "";
 
   return {
     paths: p,
-    clientId: get("CTM_OAUTH_CLIENT_ID") || DEFAULT_CLIENT_ID,
+    clientId: get("CTM_OAUTH_CLIENT_ID"),
     scope: get("CTM_OAUTH_SCOPE") || DEFAULT_SCOPE,
-    basicAuth: get("CTM_BASIC_AUTH"),
+    redirectUri: get("CTM_OAUTH_REDIRECT_URI") || "http://127.0.0.1:8765/oauth/callback",
     pythonBin: get("PYTHON_BIN") || "python3",
     renderPath: RENDER_PATH,
     outDir: get("CTM_VOICEAI_OUT_DIR") || p.runsDir,
@@ -64,11 +65,11 @@ export async function loadConfig() {
   };
 }
 
-export function configuredSummary(config) {
+export function configuredSummary(config: Config) {
   const clientId = config.clientId;
   return {
     client_id: clientId,
-    auth_priority: ["oauth bearer (CTM_BEARER_TOKEN / stored OAuth token)", "basic auth (CTM_BASIC_AUTH)"],
+    auth_priority: ["stored OAuth bearer token (authorization code + S256 PKCE)"],
     analysis_backend: "assistant-driven: the MCP host assistant performs the analysis (no LLM API or key)",
     open_browser_on_login: config.openBrowser,
     open_report_when_done: config.openReport,
@@ -79,3 +80,4 @@ export function configuredSummary(config) {
     runs_dir: config.outDir
   };
 }
+export type Config = Awaited<ReturnType<typeof loadConfig>>;

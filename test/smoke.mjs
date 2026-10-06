@@ -4,11 +4,20 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const serverPath = path.join(here, "..", "src", "index.js");
+const serverPath = path.join(here, "..", "dist", "index.js");
 
-const child = spawn(process.execPath, [serverPath], { stdio: ["pipe", "pipe", "pipe"] });
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voiceai-smoke-"));
+const child = spawn(process.execPath, [serverPath], {
+  stdio: ["pipe", "pipe", "pipe"],
+  env: { ...process.env, XDG_CONFIG_HOME: testRoot, XDG_DATA_HOME: testRoot,
+    CTM_VOICEAI_ENV_FILE: path.join(testRoot, "absent.env"), CTM_OAUTH_CLIENT_ID: "fixture-public-client",
+    CTM_VOICEAI_OPEN_BROWSER: "0" }
+});
+process.on("exit", () => { child.kill("SIGTERM"); fs.rmSync(testRoot, { recursive: true, force: true }); });
 
 let buffer = "";
 const pending = new Map();
@@ -79,6 +88,9 @@ const payload = JSON.parse(configured.result.content[0].text);
 assert.ok(payload.client_id_masked, "client id present");
 assert.ok(payload.auth, "auth block present");
 
+const authRequired = await rpc("tools/call", { name: "ctm_voiceai_get_calls", arguments: { account_id: "1" } });
+assert.equal(authRequired.result.isError, true);
+assert.equal(JSON.parse(authRequired.result.content[0].text).code, "NO_AUTH");
 console.log(`OK - ${names.length} tools registered`);
 console.log(`configured.auth.logged_in = ${payload.auth.logged_in}`);
 console.log(`configured.analysis_backend = ${payload.analysis_backend}`);
