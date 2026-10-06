@@ -2,7 +2,7 @@
 // Unit checks for PII scrubbing: names are replaced, emails/phones redacted, and
 // Markdown report structure is preserved.
 import assert from "node:assert";
-import { redactText, sanitizeNames, sanitizeMarkdown, sanitizeArtifacts } from "../src/sanitize.js";
+import { redactText, sanitizeNames, sanitizeMarkdown, sanitizeArtifacts } from "../dist/sanitize.js";
 
 // Emails and phones.
 const contact = redactText("Reach jane.caller@example.com or 555-123-4567 today.");

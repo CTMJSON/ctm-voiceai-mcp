@@ -4,45 +4,36 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { configuredSummary, loadConfig } from "./config.js";
-import { safeJson, mask, openInBrowser } from "./util.js";
-import {
-  buildAuthorizeUrl,
-  clearDeviceSession,
-  clearTokens,
-  exchangeCode,
-  loadDeviceSession,
-  pollDeviceFlow,
-  startDeviceFlow,
-  tokenState,
-  waitForDeviceFlow
-} from "./oauth.js";
+import { safeJson, mask } from "./util.js";
+import { buildAuthorizeUrl, clearTokens, exchangeCode, startLogin, tokenState, waitForLogin } from "./oauth.js";
+import { AppError } from "./errors.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { fetchCallsPage, fetchVoiceBots, resolveAuthHeader, selectBots, verifyAuth } from "./ctm.js";
-import { listRuns, loadRun, runStatus, writeReport } from "./engine.js";
+import { listRuns, runStatus, writeReport } from "./engine.js";
 
 const config = await loadConfig();
 const DEFAULT_TARGET_CALLS = 500;
-const server = new McpServer({ name: "ctm-voiceai", version: "0.1.0" });
+const server = new McpServer({ name: "ctm-voiceai", version: "0.2.0" });
 
-function toolResult(value, isError = false) {
+function toolResult(value: unknown, isError = false): CallToolResult {
   return {
     content: [{ type: "text", text: typeof value === "string" ? value : safeJson(value) }],
     isError
   };
 }
 
-function safeTool(fn) {
-  return async (args) => {
+function safeTool<T>(fn: (args: T) => Promise<unknown>) {
+  return async (args: T) => {
     try {
       return toolResult(await fn(args));
     } catch (err) {
       return toolResult(
         {
-          error: err.message,
-          code: err.code || null,
-          stack: process.env.CTM_VOICEAI_DEBUG ? err.stack : undefined,
+          error: err instanceof AppError ? err.message : "The operation failed. Check the local configuration and try again.",
+          code: err instanceof AppError ? err.code : "INTERNAL_ERROR",
           hint:
-            err.code === "NO_AUTH"
-              ? "Run ctm_voiceai_auth_login to start the OAuth2 device flow."
+            err instanceof AppError && err.code === "NO_AUTH"
+              ? "Run ctm_voiceai_auth_login to start the OAuth2 PKCE login."
               : undefined
         },
         true
@@ -51,11 +42,11 @@ function safeTool(fn) {
   };
 }
 
-function authSummary(state) {
+function authSummary(state: Awaited<ReturnType<typeof tokenState>>) {
   if (!state.logged_in) {
     return {
       logged_in: false,
-      message: "Not logged in. Call ctm_voiceai_auth_login to start the device flow."
+      message: "Not logged in. Call ctm_voiceai_auth_login to start the PKCE login."
     };
   }
   return {
@@ -82,7 +73,7 @@ server.registerTool(
     annotations: { readOnlyHint: true }
   },
   safeTool(async () => {
-    const state = await tokenState();
+    const state = await tokenState(config.clientId);
     return {
       ...configuredSummary(config),
       client_id_masked: mask(config.clientId),
@@ -94,71 +85,14 @@ server.registerTool(
 server.registerTool(
   "ctm_voiceai_auth_login",
   {
-    title: "CTM OAuth Login (Device Flow)",
-    description:
-      "Logs in to CTM with OAuth2 device flow. First call returns a user_code and verification_uri; the user visits the URL and enters the code. Call again (or pass wait_seconds) to finish and store tokens. No API key needed.",
-    inputSchema: {
-      wait_seconds: z
-        .number()
-        .int()
-        .min(0)
-        .max(600)
-        .optional()
-        .describe("Seconds to poll for authorization after starting. 0 returns immediately with the code.")
-    },
+    title: "CTM OAuth Login (PKCE)",
+    description: "Start browser sign-in using S256 PKCE and a local callback. Requires a configured public OAuth client and registered loopback redirect. Call auth_status after approving.",
+    inputSchema: { wait_seconds: z.number().int().min(0).max(600).optional() },
     annotations: { openWorldHint: true }
   },
   safeTool(async ({ wait_seconds = 0 }) => {
-    let session = await loadDeviceSession();
-    const isNew = !session;
-    let browserOpened = false;
-
-    if (!session) {
-      session = await startDeviceFlow(config.clientId);
-      if (config.openBrowser) browserOpened = openInBrowser(session.verification_uri);
-    }
-
-    const display = {
-      user_code: session.user_code,
-      verification_uri: session.verification_uri,
-      expires_in: session.expires_in,
-      instruction: `Go to ${session.verification_uri} and enter this code: ${session.user_code}`
-    };
-
-    if (!wait_seconds && isNew) {
-      return {
-        status: "device_code_issued",
-        browser_opened: browserOpened,
-        ...display,
-        next: "Authorize in the browser, then call ctm_voiceai_auth_login again to finish."
-      };
-    }
-
-    const result =
-      wait_seconds > 0
-        ? await waitForDeviceFlow(config.clientId, { maxSeconds: wait_seconds })
-        : await pollDeviceFlow(config.clientId);
-
-    if (result.status === "authorized") {
-      return { status: "authorized", auth: authSummary(await tokenState()) };
-    }
-    if (result.status === "pending") {
-      if (!browserOpened && config.openBrowser) browserOpened = openInBrowser(session.verification_uri);
-      return {
-        status: "pending",
-        browser_opened: browserOpened,
-        ...display,
-        next: "Not authorized yet. Enter the code above in the browser, then call ctm_voiceai_auth_login again."
-      };
-    }
-    // expired / denied / no_session: clear the stale session so the next call starts fresh.
-    await clearDeviceSession();
-    return {
-      status: result.status,
-      detail: result.detail || null,
-      ...display,
-      next: "That code is no longer valid. Call ctm_voiceai_auth_login again for a fresh code."
-    };
+    const started = await startLogin(config);
+    return wait_seconds > 0 ? { ...started, ...await waitForLogin(config, wait_seconds) } : started;
   })
 );
 
@@ -166,64 +100,46 @@ server.registerTool(
   "ctm_voiceai_auth_status",
   {
     title: "CTM OAuth Status",
-    description: "Reports whether CTM OAuth tokens are stored, their expiry, scope, and account id.",
+    description: "Reports local token expiry and whether a refresh token is present. Does not verify live CTM access.",
     inputSchema: {},
     annotations: { readOnlyHint: true }
   },
-  safeTool(async () => authSummary(await tokenState()))
+  safeTool(async () => authSummary(await tokenState(config.clientId)))
 );
 
 server.registerTool(
   "ctm_voiceai_auth_logout",
   {
-    title: "CTM OAuth Logout",
-    description: "Deletes stored CTM OAuth tokens and any pending device-flow session.",
+    title: "CTM OAuth Local Logout",
+    description: "Deletes local tokens and pending login. Does not revoke the grant at CTM.",
     inputSchema: {},
     annotations: { destructiveHint: true }
   },
-  safeTool(async () => {
-    await clearTokens();
-    return { status: "logged_out" };
-  })
+  safeTool(async () => { await clearTokens(); return { status: "logged_out", server_revoked: false }; })
 );
 
 server.registerTool(
   "ctm_voiceai_auth_url",
   {
-    title: "CTM OAuth Web Flow URL",
-    description:
-      "Builds the OAuth2 authorization URL for the web flow. Open it in a browser; CTM redirects to your redirect_uri with a ?code=. Then call ctm_voiceai_auth_exchange with that code.",
-    inputSchema: {
-      redirect_uri: z.string().describe("The registered redirect URI for the OAuth app."),
-      scope: z.string().optional().describe("Defaults to the configured scope."),
-      state: z.string().optional()
-    },
-    annotations: { readOnlyHint: true }
+    title: "CTM OAuth PKCE URL",
+    description: "Starts a manual PKCE login with the configured public client and registered redirect URI. The verifier stays local. Complete using auth_exchange with the full callback URL.",
+    inputSchema: {},
+    annotations: { openWorldHint: true }
   },
-  safeTool(async ({ redirect_uri, scope, state }) => ({
-    authorize_url: buildAuthorizeUrl({
-      clientId: config.clientId,
-      redirectUri: redirect_uri,
-      scope: scope || config.scope,
-      state
-    })
-  }))
+  safeTool(async () => buildAuthorizeUrl(config))
 );
 
 server.registerTool(
   "ctm_voiceai_auth_exchange",
   {
-    title: "CTM OAuth Exchange Code",
-    description: "Exchanges a web-flow authorization code for CTM OAuth tokens and stores them.",
-    inputSchema: {
-      code: z.string().describe("The code query parameter CTM redirected back with."),
-      redirect_uri: z.string().describe("Must match the redirect_uri used to authorize.")
-    },
+    title: "CTM OAuth PKCE Callback",
+    description: "Completes a pending manual login. Validates callback URI and state before exchanging the code with the locally stored PKCE verifier. Never pass an access token.",
+    inputSchema: { callback_url: z.string().url().describe("Complete registered callback URL including code and state.") },
     annotations: { openWorldHint: true }
   },
-  safeTool(async ({ code, redirect_uri }) => {
-    await exchangeCode({ clientId: config.clientId, code, redirectUri: redirect_uri });
-    return { status: "authorized", auth: authSummary(await tokenState()) };
+  safeTool(async ({ callback_url }) => {
+    await exchangeCode(config, callback_url);
+    return { status: "authorized", auth: authSummary(await tokenState(config.clientId)) };
   })
 );
 
@@ -231,7 +147,7 @@ server.registerTool(
 // VoiceAI agents
 // ---------------------------------------------------------------------------
 
-async function authHeader(accountId) {
+async function authHeader(accountId: string) {
   // When we know the account, make a lightweight verified call so an expired or
   // missing login fails fast with a clear, actionable message.
   if (accountId) return verifyAuth(config, accountId);
@@ -257,7 +173,7 @@ server.registerTool(
   safeTool(async ({ account_id, voice_bot }) => {
     const auth = await authHeader(account_id);
     const bots = await fetchVoiceBots(account_id, auth.header);
-    const selectors = [].concat(voice_bot || []);
+    const selectors = typeof voice_bot === "string" ? [voice_bot] : voice_bot ?? [];
     const selected = selectors.length ? selectBots(bots, selectors) : bots.filter((b) => b.instructions);
     return {
       account_id,
@@ -433,14 +349,14 @@ server.registerTool(
     const record = await writeReport(config, {
       accountId: args.account_id,
       artifacts,
-      open: args.open ?? true,
+      open: args.open ?? config.openReport,
       outDir: args.out_dir
     });
     return {
       run_id: record.run_id,
       status: record.status,
       run_dir: record.run_dir,
-      html_opened: record.status === "complete" && (args.open ?? true),
+      html_opened: record.status === "complete" && (args.open ?? config.openReport),
       files: record.files,
       error: record.error || null
     };

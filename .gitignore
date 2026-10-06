@@ -14,3 +14,5 @@ config/local.*
 
 # Keep the example config
 !config/config.env.example
+dist/
+pkce.json

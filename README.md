@@ -11,7 +11,7 @@ rewritten prompt, rendered as a self-contained HTML report.
 
 Highlights:
 
-- **No API keys at all.** Login is CTM OAuth2 (device flow), and the analysis is
+- **No API keys at all.** Login is CTM OAuth2 authorization code with S256 PKCE, and the analysis is
   performed by your MCP assistant itself - there is no external LLM call and no
   model API key.
 - **Data + renderer only.** The server authenticates with CTM, fetches the
@@ -28,7 +28,7 @@ Highlights:
 
 ## The flow
 
-1. **Authenticate** with CTM via OAuth device flow (`ctm_voiceai_auth_login`).
+1. **Authenticate** with CTM via OAuth PKCE (`ctm_voiceai_auth_login`).
 2. **Get the VoiceAI agents and their instructions** (`ctm_voiceai_get_voice_bots`).
 3. **Get the call activities and transcriptions** (`ctm_voiceai_get_calls`). The
    response includes a `plan` sized to a **default target of 500 calls** (set
@@ -66,15 +66,39 @@ Highlights:
 ```bash
 git clone https://github.com/CTMJSON/ctm-voiceai-mcp.git
 cd ctm-voiceai-mcp
-npm install
+npm ci
+npm run typecheck
+npm test
 ```
 
-### 2. Register it with your MCP client
+### 2. Configure a public OAuth client
+
+Ask your CTM administrator/engineering team to provision or confirm a **public**
+OAuth client that supports authorization-code + S256 PKCE, refresh tokens, and
+these scopes: `profile activity reports`. Register this exact callback:
+
+```text
+http://127.0.0.1:8765/oauth/callback
+```
+
+Create `~/.config/ctm-voiceai/config.env`:
+
+```ini
+CTM_OAUTH_CLIENT_ID=<your-public-client-id>
+CTM_OAUTH_REDIRECT_URI=http://127.0.0.1:8765/oauth/callback
+CTM_OAUTH_SCOPE=profile activity reports
+```
+
+The client ID is public; no client secret belongs in this local application.
+There is no bundled client ID and no Basic-auth or ambient bearer-token fallback.
+The former device-flow client is not assumed to be a public PKCE client.
+
+### 3. Register it with your MCP client
 
 **Claude Code** (one command):
 
 ```bash
-claude mcp add ctmVoiceAI --scope user -- node "$(pwd)/src/index.js"
+claude mcp add ctmVoiceAI --scope user -- node "$(pwd)/dist/index.js"
 ```
 
 **Claude Desktop** - add this to your `claude_desktop_config.json`:
@@ -84,7 +108,7 @@ claude mcp add ctmVoiceAI --scope user -- node "$(pwd)/src/index.js"
   "mcpServers": {
     "ctmVoiceAI": {
       "command": "node",
-      "args": ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js"]
+      "args": ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/dist/index.js"]
     }
   }
 }
@@ -95,46 +119,53 @@ claude mcp add ctmVoiceAI --scope user -- node "$(pwd)/src/index.js"
 ```toml
 [mcp_servers.ctmVoiceAI]
 command = "node"
-args = ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js"]
+args = ["/ABSOLUTE/PATH/TO/ctm-voiceai-mcp/dist/index.js"]
 ```
 
 **Other MCP clients** - use the same stdio command:
-`node /ABSOLUTE/PATH/TO/ctm-voiceai-mcp/src/index.js`.
+`node /ABSOLUTE/PATH/TO/ctm-voiceai-mcp/dist/index.js`.
 
-### 3. Run it
+### 4. Run it
 
 Ask your assistant:
 
 > Review the VoiceAI agent for account **&lt;account id&gt;**: analyze the calls,
 > compare them to the current agent prompt, recommend updates, and open the report.
 
-The assistant walks the six steps above. It logs in to CTM if needed (you enter a
-short code in the browser), pulls the agents and transcripts, does the analysis,
-and finally writes and opens the HTML report.
+The assistant starts `ctm_voiceai_auth_login`. Approve access in your browser;
+the loopback callback completes sign-in without sending an authorization code
+through the assistant. Check `ctm_voiceai_auth_status`, then run the review.
+
+For a headless/manual flow, `ctm_voiceai_auth_url` creates a pending PKCE login
+using the configured redirect URI. Pass the **full callback URL**, including
+`code` and `state`, to `ctm_voiceai_auth_exchange` as `callback_url`. The verifier
+stays local. Prefer the automatic loopback flow when available.
 
 ## Tools
 
 | Tool | Step | Purpose |
 |------|------|---------|
 | `ctm_voiceai_configured` | - | Config + login status (never reveals secrets) |
-| `ctm_voiceai_auth_login` | 1 | Start or resume the device-flow login |
+| `ctm_voiceai_auth_login` | 1 | Start browser sign-in with a loopback PKCE callback |
 | `ctm_voiceai_auth_status` | 1 | Token state and expiry |
-| `ctm_voiceai_auth_logout` | 1 | Delete stored tokens |
-| `ctm_voiceai_auth_url` | 1 | Build a web-flow authorize URL |
-| `ctm_voiceai_auth_exchange` | 1 | Exchange a web-flow code for tokens |
+| `ctm_voiceai_auth_logout` | 1 | Delete local tokens and pending login (not server-side revocation) |
+| `ctm_voiceai_auth_url` | 1 | Start a manual PKCE login |
+| `ctm_voiceai_auth_exchange` | 1 | Validate a complete callback URL and exchange with PKCE |
 | `ctm_voiceai_get_voice_bots` | 2 | Get agents and their full current instructions |
 | `ctm_voiceai_get_calls` | 3 | One page of answered calls with transcriptions |
 | `ctm_voiceai_write_report` | 6 | Write files, render the HTML report, open it |
 | `ctm_voiceai_run_status` | - | Read a prior report's metadata |
 | `ctm_voiceai_list_runs` | - | List recent reports |
 
-Authentication is per-user: the server ships with a shared, public CTM OAuth
-client id (not a secret), but each user signs in with their own CTM login and only
-sees accounts that login can access.
+Authentication uses the local user's CTM login and its CTM account permissions.
+This is still a local stdio server, not a hosted multi-user service. Each OS user
+has a private token store. Local processes sharing a config directory serialize
+token refresh and login mutations with `auth.lock`. They share one CTM identity;
+use separate `XDG_CONFIG_HOME` directories for independent identities.
 
-## Configuration (optional)
+## Additional configuration
 
-The defaults work out of the box. To change them, create
+After configuring the public OAuth client above, optional settings go in
 `~/.config/ctm-voiceai/config.env`:
 
 ```ini
@@ -164,8 +195,17 @@ run.json / run.log              run metadata and renderer log
 ## Troubleshooting
 
 - **"NO_AUTH"** - run `ctm_voiceai_auth_login` to sign in.
-- **Login code expired** - device codes expire after about 25 minutes; just run
-  `ctm_voiceai_auth_login` again for a new one.
+- **Refresh outcome unknown** - a timeout or invalid refresh response clears local
+  credentials to avoid replaying a potentially rotated refresh token. Sign in again.
+- **Login expired** - pending PKCE logins expire after 10 minutes. Start login again.
+- **OAUTH_CONFIG** - configure a public client and registered redirect URI.
+- **FORBIDDEN** - the CTM user lacks access to the requested account/operation;
+  signing in again with the same permissions will not fix it.
+- **OAUTH_BUSY** - another process is updating authentication. Retry later.
+  After a crash, stop all instances using that config directory before deleting
+  its `auth.lock` directory. Do not remove a live process's lock.
+- **Callback port busy** - close the other listener or configure another registered
+  loopback port. Keep the client running while approving the login.
 - **Report did not open** - set `CTM_VOICEAI_OPEN_REPORT=1` (default) or open the
   `voiceai_topic_analysis.html` path returned by `ctm_voiceai_write_report`.
 - **Thin analysis** - accounts with few transcribed calls produce thin results.
@@ -174,11 +214,37 @@ run.json / run.log              run metadata and renderer log
 ## Scope
 
 Read-only against CTM (calls and voice-bot configuration). It never changes a live
-agent. No data leaves your machine except the analysis you explicitly write into
-the report - there is no external LLM call.
+agent. The server makes no direct external LLM call. It returns transcripts and agent
+instructions to your MCP client, which may send them to its configured model
+provider. Report redaction happens after analysis and is heuristic; it is not a
+guarantee that sensitive data has been removed.
 
 ## Support and feedback
 
 This is a custom development, not an official CallTrackingMetrics product.
 Questions, bugs, feature requests, and feedback are welcome:
 **jason.smith@ctm.com**.
+
+## Upgrading from 0.1.0
+
+- Source is now strict TypeScript; `npm ci` builds `dist/` through the prepare
+  script. Update existing MCP registrations from `src/index.js` to `dist/index.js`.
+- Remove legacy Basic-auth settings. They are ignored and never used.
+- Configure a public PKCE client and sign in again. Legacy device-flow token
+  files are not reused. Starting a new login clears the previous local token.
+- `auth_login` no longer returns a device code. `auth_url` uses configured
+  settings and generates state; `auth_exchange` now requires `callback_url`
+  instead of a bare code and redirect URI.
+- Auth tools remain available for this local stage. Streamable HTTP, hosted
+  identity, and remote report storage are a separate migration.
+
+## Development and validation
+
+`npm run typecheck` checks strict TypeScript. `npm test` builds and runs mocked
+OAuth/API tests, local callback integration, stdio smoke tests, sanitizer checks,
+and the Python HTML rendering test. Tests use temporary config directories and
+never require real credentials.
+
+Before customer use, validate the configured public client, registered redirect,
+consent scopes, token refresh, and an account-scoped read against the intended CTM
+deployment. Mocked tests do not establish live OAuth compatibility.

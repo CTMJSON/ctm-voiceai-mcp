@@ -2,7 +2,7 @@
 name: ctm-voiceai-prompt-review
 description: Analyze a CallTrackingMetrics (CTM) account's real phone call transcripts, compare them against the account's live VoiceAI agent instructions, and produce prioritized, paste-ready prompt updates plus a fully rewritten prompt and a self-contained HTML report. Uses CTM OAuth2 login. The assistant performs the analysis itself, so no external LLM or API key is used. Use when asked to review, QA, or improve a CTM VoiceAI agent or bot prompt.
 license: Custom development - contact jason.smith@ctm.com for support
-compatibility: Requires the ctmVoiceAI MCP server (this project) and Python 3.9+ for the HTML renderer. Login uses CTM OAuth2 (device flow) so no CTM API key is required. No model API key is used; the assistant does the analysis.
+compatibility: Requires the ctmVoiceAI MCP server (this project) and Python 3.9+ for the HTML renderer. Login uses CTM OAuth2 authorization code with S256 PKCE so no CTM API key is required. No model API key is used; the assistant does the analysis.
 ---
 
 # CTM VoiceAI Prompt Review
@@ -22,10 +22,12 @@ Follow these steps in order.
 ### 1. Authenticate with CTM (OAuth)
 
 Check first with `ctm_voiceai_auth_status`. If not logged in, run
-`ctm_voiceai_auth_login`. It returns a `user_code` and `verification_uri`; tell
-the user to open <https://app.calltrackingmetrics.com/accesscode> and enter the
-code, then call `ctm_voiceai_auth_login` again (or pass `wait_seconds`) to finish.
-Tokens are stored and refreshed automatically.
+`ctm_voiceai_auth_login` and have the user approve the returned authorization URL.
+The configured public OAuth client and registered loopback callback are required.
+The browser callback completes sign-in automatically; check `ctm_voiceai_auth_status`
+again. Do not ask the user for tokens or a client secret. For a deliberate manual
+flow, `auth_url` creates the PKCE session and `auth_exchange` accepts the full
+`callback_url`, including state. Never fall back to Basic authentication.
 
 ### 2. Get the VoiceAI agents and their instructions
 
