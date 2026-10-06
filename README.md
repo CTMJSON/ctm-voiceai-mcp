@@ -26,6 +26,16 @@ Highlights:
 - Works with any MCP-capable client: Claude Desktop, Claude Code, Codex, pi, or a
   local LLM agent.
 
+## Hosted template (Stage 2)
+
+For multi-user Streamable HTTP, see [the hosted setup and engineering handoff](docs/HOSTED.md).
+It includes a free local Keycloak + PostgreSQL + Node container setup, verified JWT callers,
+per-user encrypted CTM OAuth grants, private reports, and cross-user isolation tests.
+Hosted authentication happens in a browser connection page, with no auth tools or local Python/file output.
+The Compose configuration is for local development; production deployment requires engineering configuration.
+
+The remainder of this README describes the existing **local stdio** mode.
+
 ## The flow
 
 1. **Authenticate** with CTM via OAuth PKCE (`ctm_voiceai_auth_login`).

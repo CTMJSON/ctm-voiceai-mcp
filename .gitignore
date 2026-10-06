@@ -16,3 +16,4 @@ config/local.*
 !config/config.env.example
 dist/
 pkce.json
+deploy/keycloak/*-realm.json

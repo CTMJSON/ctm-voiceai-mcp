@@ -7,6 +7,17 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.7-alpine
+        env:
+          POSTGRES_PASSWORD: ephemeral-test-only
+          POSTGRES_DB: voiceai_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      TEST_ADMIN_DATABASE_URL: postgresql://postgres:ephemeral-test-only@127.0.0.1:5432/voiceai_test
     strategy:
       matrix:
         node: [20, 22]
@@ -22,3 +33,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+  containers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run hosted:setup
+      - run: docker compose -f deploy/compose.yaml up --build -d
+      - run: node test/compose.mjs
+      - if: always()
+        run: docker compose -f deploy/compose.yaml down -v

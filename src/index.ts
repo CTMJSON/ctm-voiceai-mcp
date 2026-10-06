@@ -8,7 +8,8 @@ import { safeJson, mask } from "./util.js";
 import { buildAuthorizeUrl, clearTokens, exchangeCode, startLogin, tokenState, waitForLogin } from "./oauth.js";
 import { AppError } from "./errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { fetchCallsPage, fetchVoiceBots, resolveAuthHeader, selectBots, verifyAuth } from "./ctm.js";
+import { fetchCallsPage, fetchVoiceBots, selectBots } from "./ctm.js";
+import { resolveAuthHeader, verifyAuth } from "./local-auth.js";
 import { listRuns, runStatus, writeReport } from "./engine.js";
 
 const config = await loadConfig();
