@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { decodeJwt } from 'jose';
 const env=Object.fromEntries((await readFile(new URL('../deploy/.env',import.meta.url),'utf8')).trim().split('\n').map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
 const origin='http://127.0.0.1:8000', issuer='http://127.0.0.1:8080/realms/voiceai';
 async function ready(url) {
@@ -15,6 +16,10 @@ for(const username of ['alice','bob']) {
   const r=await fetch(issuer+'/protocol/openid-connect/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'password',client_id:'voiceai-dev-test',username,password:env[`TEST_${username.toUpperCase()}_PASSWORD`],scope:'ctm-voiceai:use'})});
   // Never include token responses or fixture passwords in assertion output.
   assert.equal(r.status,200,'Keycloak fixture login failed');const token=(await r.json()).access_token;
+  const claims=decodeJwt(token);
+  assert.ok(typeof claims.sub==='string' && claims.sub.length>0,'Keycloak must emit an immutable subject');
+  assert.ok(claims.iss===issuer,'Keycloak issuer mismatch');
+  assert.ok([claims.aud].flat().includes(origin+'/mcp'),'Keycloak must emit the MCP resource audience');
   const rpc=async(method,params)=>{
     const response=await fetch(origin+'/mcp',{method:'POST',headers:{Authorization:`Bearer ${token}`,Accept:'application/json, text/event-stream','Content-Type':'application/json','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
     assert.equal(response.status,200,'MCP bearer validation failed');return response.json();

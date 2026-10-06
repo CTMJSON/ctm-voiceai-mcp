@@ -22,7 +22,9 @@ const realm = {
   clientScopes: [{ name: 'ctm-voiceai:use', protocol: 'openid-connect',
     attributes: { 'include.in.token.scope': 'true', 'display.on.consent.screen': 'true' },
     protocolMappers: [{ name: 'mcp-audience', protocol: 'openid-connect', protocolMapper: 'oidc-audience-mapper',
-      config: { 'included.custom.audience': 'http://127.0.0.1:8000/mcp', 'access.token.claim': 'true', 'id.token.claim': 'false' } }]
+      config: { 'included.custom.audience': 'http://127.0.0.1:8000/mcp', 'access.token.claim': 'true', 'id.token.claim': 'false' } },
+      { name: 'immutable-subject', protocol: 'openid-connect', protocolMapper: 'oidc-sub-mapper',
+        config: { 'access.token.claim': 'true' } }]
   }],
   clients: [
     { clientId: 'voiceai-portal', name: 'VoiceAI connection portal', protocol: 'openid-connect', enabled: true, publicClient: true,
