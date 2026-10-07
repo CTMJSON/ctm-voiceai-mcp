@@ -26,6 +26,20 @@ Highlights:
 - Works with any MCP-capable client: Claude Desktop, Claude Code, Codex, pi, or a
   local LLM agent.
 
+## Local CTM CLI login mode
+
+Set `CTM_VOICEAI_AUTH_MODE=cli` to use your `ctm auth login` GraphQL session with the local stdio server. This mode verifies the returned account ID and uses sequential cursor pagination for transcripts. See [local CLI setup](docs/LOCAL-CLI.md). It has no Basic-auth fallback and does not change the hosted server.
+
+## Hosted template (Stage 2)
+
+For multi-user Streamable HTTP, see [the hosted setup and engineering handoff](docs/HOSTED.md).
+It includes a free local Keycloak + PostgreSQL + Node container setup, verified JWT callers,
+per-user encrypted CTM OAuth grants, private reports, and cross-user isolation tests.
+Hosted authentication happens in a browser connection page, with no auth tools or local Python/file output.
+The Compose configuration is for local development; production deployment requires engineering configuration.
+
+The remainder of this README describes the existing **local stdio** mode.
+
 ## The flow
 
 1. **Authenticate** with CTM via OAuth PKCE (`ctm_voiceai_auth_login`).

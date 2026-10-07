@@ -15,7 +15,8 @@ process.env.CTM_OAUTH_CLIENT_ID = "fixture-public-client";
 process.env.CTM_VOICEAI_OPEN_BROWSER = "0";
 const { loadConfig, paths } = await import("../dist/config.js");
 const { buildAuthorizeUrl, exchangeCode, getAccessToken, tokenState, clearTokens, startLogin, waitForLogin, OAUTH } = await import("../dist/oauth.js");
-const { resolveAuthHeader, verifyAuth, fetchVoiceBots, fetchCallsPage } = await import("../dist/ctm.js");
+const { resolveAuthHeader, verifyAuth } = await import("../dist/local-auth.js");
+const { fetchVoiceBots, fetchCallsPage } = await import("../dist/ctm.js");
 const originalFetch = globalThis.fetch;
 let requests;
 let config;
@@ -336,4 +337,27 @@ test("uncertain refresh outcome requires new login rather than replaying the old
   await assert.rejects(resolveAuthHeader(config), { code: "OAUTH_NETWORK" });
   await assert.rejects(resolveAuthHeader(config), { code: "NO_AUTH" });
   assert.equal(count, 1);
+});
+
+
+test("account-bound OAuth cannot silently substitute another requested account", async () => {
+  globalThis.fetch = async () => response(tokenBody({ account_id: "111111" }));
+  await login();
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("Must not reach CTM"); };
+  await assert.rejects(verifyAuth(config, "222222"), e => e.code === "ACCOUNT_MISMATCH");
+  await expire();
+  await assert.rejects(verifyAuth(config, "222222"), e => e.code === "ACCOUNT_MISMATCH");
+  assert.equal(calls, 0, "reject before API calls or token refresh");
+  assert.equal((await tokenState(config.clientId)).account_id, "111111");
+});
+
+test("refresh cannot switch the account of an in-flight request", async () => {
+  globalThis.fetch = async () => response(tokenBody({ account_id: "111111" }));
+  await login(); await expire();
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return response(tokenBody({ account_id: "222222" })); };
+  await assert.rejects(verifyAuth(config, "111111"), e => e.code === "ACCOUNT_MISMATCH");
+  assert.equal(calls, 1, "only the refresh endpoint was called");
+  assert.equal((await tokenState(config.clientId)).logged_in, false);
 });

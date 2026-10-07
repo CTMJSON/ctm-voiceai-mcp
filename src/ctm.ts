@@ -1,6 +1,4 @@
-import { getAccessToken } from "./oauth.js";
 import { z } from "zod";
-import type { Config } from "./config.js";
 import { AppError } from "./errors.js";
 
 const idSchema = z.union([z.string(), z.number()]);
@@ -26,7 +24,7 @@ const pagination = {
 };
 const botsResponseSchema = z.object({ voice_bots: z.array(botSchema), ...pagination });
 type RawCall = z.infer<typeof callSchema>;
-type CallOptions = {
+export type CallOptions = {
   page?: number; perPage?: number; since?: string; until?: string;
   direction?: string; hasTranscription?: boolean;
 };
@@ -49,14 +47,7 @@ function normalizeBot(raw: z.infer<typeof botSchema>) {
   };
 }
 
-/** OAuth only: a failed refresh must never downgrade to another credential. */
-export async function resolveAuthHeader(config: Config) {
-  const token = await getAccessToken({ clientId: config.clientId });
-  if (!token) throw new AppError("No valid CTM login. Run ctm_voiceai_auth_login.", "NO_AUTH");
-  return { header: `Bearer ${token}`, mode: "oauth" as const };
-}
-
-async function getJson(url: string, authHeader: string, { timeoutMs = 60000 } = {}): Promise<unknown> {
+export async function getJson(url: string, authHeader: string, { timeoutMs = 60000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<unknown> {
   // CTM pagination is untrusted input; never forward credentials to another origin.
   const target = new URL(url, API_BASE + "/");
   if (target.origin !== new URL(API_BASE).origin || target.username || target.password ||
@@ -67,7 +58,7 @@ async function getJson(url: string, authHeader: string, { timeoutMs = 60000 } = 
   try {
     response = await fetch(target, {
       headers: { Authorization: authHeader, Accept: "application/json" },
-      redirect: "error", signal: AbortSignal.timeout(timeoutMs)
+      redirect: "error", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
     });
   } catch { throw new AppError("CTM request failed or timed out.", "API_NETWORK"); }
   if (!response.ok) throw new AppError(`CTM API request failed (HTTP ${response.status}).`, "API_ERROR", response.status);
@@ -81,34 +72,13 @@ function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, value: un
   return parsed.data;
 }
 
-/**
- * Resolve credentials and make a lightweight call so we fail fast (and clearly)
- * when the CTM login is missing or expired, instead of midway through a run.
- */
-export async function verifyAuth(config: Config, accountId: string) {
-  const auth = await resolveAuthHeader(config);
-  const url = `${API_BASE}/accounts/${accountSegment(accountId)}/calls?per_page=1`;
-  try {
-    await getJson(url, auth.header, { timeoutMs: 15000 });
-    return auth;
-  } catch (err) {
-    if (err instanceof AppError && err.status === 401) {
-      throw new AppError("CTM rejected the login. Run ctm_voiceai_auth_login to sign in again.", "NO_AUTH", 401);
-    }
-    if (err instanceof AppError && err.status === 403) {
-      throw new AppError("Your CTM login cannot access this account or operation.", "FORBIDDEN", 403);
-    }
-    throw err;
-  }
-}
-
-export async function fetchVoiceBots(accountId: string, authHeader: string, { perPage = 100 } = {}) {
+export async function fetchVoiceBots(accountId: string, authHeader: string, { perPage = 100, signal }: { perPage?: number; signal?: AbortSignal } = {}) {
   let url: string | null = `${API_BASE}/accounts/${accountSegment(accountId)}/voice_bots?per_page=${perPage}&page=1`;
   const bots = [];
   let page = 0;
   while (url) {
     page += 1;
-    const data: z.infer<typeof botsResponseSchema> = parseResponse(botsResponseSchema, await getJson(url, authHeader));
+    const data: z.infer<typeof botsResponseSchema> = parseResponse(botsResponseSchema, await getJson(url, authHeader, { signal }));
     const list = Array.isArray(data.voice_bots) ? data.voice_bots : [];
     for (const raw of list) bots.push(normalizeBot(raw));
     url = data.next_page || null;
@@ -217,3 +187,6 @@ export function selectBots(bots: ReturnType<typeof normalizeBot>[], selectors: s
 }
 
 export const _internals = { normalizeBot, API_BASE };
+
+export type VoiceBot = ReturnType<typeof normalizeBot>;
+export type CallsPage = Awaited<ReturnType<typeof fetchCallsPage>>;

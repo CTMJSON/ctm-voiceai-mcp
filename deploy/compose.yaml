@@ -1,0 +1,64 @@
+# LOCAL DEVELOPMENT ONLY. Loopback ports; Keycloak start-dev is not a production deployment.
+services:
+  postgres:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_USER: voiceai_admin
+      POSTGRES_DB: voiceai
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?Run npm run hosted:setup}
+      VOICEAI_DB_APP_PASSWORD: ${DB_APP_PASSWORD:?Run npm run hosted:setup}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-voiceai.sh:ro
+      - ./schema.sql:/schema.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U voiceai_admin -d voiceai"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: [start-dev, --import-realm]
+    environment:
+      TEST_ALICE_PASSWORD: ${TEST_ALICE_PASSWORD}
+      TEST_BOB_PASSWORD: ${TEST_BOB_PASSWORD}
+      KC_HOSTNAME: http://127.0.0.1:8080
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Run npm run hosted:setup}
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - ./keycloak/voiceai-realm.json:/opt/keycloak/data/import/voiceai-realm.json:ro
+      - keycloak-data:/opt/keycloak/data
+  mcp:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8000"
+      HOSTED_DEV_MODE: "1"
+      HOSTED_PUBLIC_URL: http://127.0.0.1:8000
+      DATABASE_URL: postgresql://voiceai_app:${DB_APP_PASSWORD}@postgres:5432/voiceai
+      HOSTED_ENCRYPTION_KEY: ${HOSTED_ENCRYPTION_KEY:?Run npm run hosted:setup}
+      CTM_HOSTED_CLIENT_ID: ${CTM_HOSTED_CLIENT_ID:?Set a public CTM client ID in deploy/.env}
+      OIDC_ISSUER: http://127.0.0.1:8080/realms/voiceai
+      OIDC_JWKS_URL: http://keycloak:8080/realms/voiceai/protocol/openid-connect/certs
+      OIDC_AUTHORIZE_URL: http://127.0.0.1:8080/realms/voiceai/protocol/openid-connect/auth
+      OIDC_TOKEN_URL: http://keycloak:8080/realms/voiceai/protocol/openid-connect/token
+      OIDC_PORTAL_CLIENT_ID: voiceai-portal
+      REPORT_RETENTION_DAYS: "7"
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      keycloak: { condition: service_started }
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+volumes:
+  postgres-data:
+  keycloak-data:
