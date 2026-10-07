@@ -1,4 +1,5 @@
 import os from "node:os";
+import { AppError } from "./errors.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exists, parseEnvFile, readText } from "./util.js";
@@ -51,7 +52,11 @@ export async function loadConfig() {
 
   const get = (key: string) => process.env[key] || fileEnv[key] || extraEnv[key] || "";
 
+  const mode = get("CTM_VOICEAI_AUTH_MODE") || "oauth";
+  if (mode !== "oauth" && mode !== "cli") throw new AppError("CTM_VOICEAI_AUTH_MODE must be oauth or cli.", "CONFIG");
   return {
+    authMode: mode,
+    cliConfigFile: get("CTM_VOICEAI_CLI_CONFIG") || path.join(os.homedir(), ".ctm.yml"),
     paths: p,
     clientId: get("CTM_OAUTH_CLIENT_ID"),
     scope: get("CTM_OAUTH_SCOPE") || DEFAULT_SCOPE,
@@ -69,7 +74,8 @@ export function configuredSummary(config: Config) {
   const clientId = config.clientId;
   return {
     client_id: clientId,
-    auth_priority: ["stored OAuth bearer token (authorization code + S256 PKCE)"],
+    auth_mode: config.authMode,
+    auth_priority: [config.authMode === "cli" ? "CTM CLI browser-login GraphQL token only" : "stored OAuth bearer token (authorization code + S256 PKCE)"],
     analysis_backend: "assistant-driven: the MCP host assistant performs the analysis (no LLM API or key)",
     open_browser_on_login: config.openBrowser,
     open_report_when_done: config.openReport,

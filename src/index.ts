@@ -9,12 +9,14 @@ import { buildAuthorizeUrl, clearTokens, exchangeCode, startLogin, tokenState, w
 import { AppError } from "./errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { fetchCallsPage, fetchVoiceBots, selectBots } from "./ctm.js";
+import { CliGraphql } from "./cli-graphql.js";
 import { resolveAuthHeader, verifyAuth } from "./local-auth.js";
 import { listRuns, runStatus, writeReport } from "./engine.js";
 
 const config = await loadConfig();
+const cli = new CliGraphql(config);
 const DEFAULT_TARGET_CALLS = 500;
-const server = new McpServer({ name: "ctm-voiceai", version: "0.2.0" });
+const server = new McpServer({ name: "ctm-voiceai", version: "0.3.1" });
 
 function toolResult(value: unknown, isError = false): CallToolResult {
   return {
@@ -34,7 +36,7 @@ function safeTool<T>(fn: (args: T) => Promise<unknown>) {
           code: err instanceof AppError ? err.code : "INTERNAL_ERROR",
           hint:
             err instanceof AppError && err.code === "NO_AUTH"
-              ? "Run ctm_voiceai_auth_login to start the OAuth2 PKCE login."
+              ? (config.authMode === "cli" ? "Run ctm auth login in Terminal." : "Run ctm_voiceai_auth_login to start the OAuth2 PKCE login.")
               : undefined
         },
         true
@@ -74,11 +76,11 @@ server.registerTool(
     annotations: { readOnlyHint: true }
   },
   safeTool(async () => {
-    const state = await tokenState(config.clientId);
+    const state = config.authMode === "cli" ? null : await tokenState(config.clientId);
     return {
       ...configuredSummary(config),
       client_id_masked: mask(config.clientId),
-      auth: authSummary(state)
+      auth: state ? authSummary(state) : await cli.status()
     };
   })
 );
@@ -86,12 +88,13 @@ server.registerTool(
 server.registerTool(
   "ctm_voiceai_auth_login",
   {
-    title: "CTM OAuth Login (PKCE)",
-    description: "Start browser sign-in using S256 PKCE and a local callback. Requires a configured public OAuth client and registered loopback redirect. Call auth_status after approving.",
+    title: config.authMode === "cli" ? "CTM CLI Login Instructions" : "CTM OAuth Login (PKCE)",
+    description: config.authMode === "cli" ? "Returns Terminal sign-in instructions for the shared CTM CLI session. Does not start OAuth app registration." : "Start browser sign-in using S256 PKCE and a local callback. Requires a configured public OAuth client and registered loopback redirect. Call auth_status after approving.",
     inputSchema: { wait_seconds: z.number().int().min(0).max(600).optional() },
     annotations: { openWorldHint: true }
   },
   safeTool(async ({ wait_seconds = 0 }) => {
+    if (config.authMode === "cli") return { status: "external_login_required", message: "Run ctm auth login in Terminal. Approve read-only access, then call auth_status. No OAuth app registration is needed in CLI mode." };
     const started = await startLogin(config);
     return wait_seconds > 0 ? { ...started, ...await waitForLogin(config, wait_seconds) } : started;
   })
@@ -100,12 +103,12 @@ server.registerTool(
 server.registerTool(
   "ctm_voiceai_auth_status",
   {
-    title: "CTM OAuth Status",
-    description: "Reports local token expiry and whether a refresh token is present. Does not verify live CTM access.",
+    title: "CTM Login Status",
+    description: "Reports expiry of the selected local CLI or OAuth session. Does not verify live CTM access.",
     inputSchema: {},
     annotations: { readOnlyHint: true }
   },
-  safeTool(async () => authSummary(await tokenState(config.clientId)))
+  safeTool(async () => config.authMode === "cli" ? cli.status() : authSummary(await tokenState(config.clientId)))
 );
 
 server.registerTool(
@@ -116,7 +119,7 @@ server.registerTool(
     inputSchema: {},
     annotations: { destructiveHint: true }
   },
-  safeTool(async () => { await clearTokens(); return { status: "logged_out", server_revoked: false }; })
+  safeTool(async () => { requireOAuthMode(); await clearTokens(); return { status: "logged_out", server_revoked: false }; })
 );
 
 server.registerTool(
@@ -127,7 +130,7 @@ server.registerTool(
     inputSchema: {},
     annotations: { openWorldHint: true }
   },
-  safeTool(async () => buildAuthorizeUrl(config))
+  safeTool(async () => { requireOAuthMode(); return buildAuthorizeUrl(config); })
 );
 
 server.registerTool(
@@ -139,6 +142,7 @@ server.registerTool(
     annotations: { openWorldHint: true }
   },
   safeTool(async ({ callback_url }) => {
+    requireOAuthMode();
     await exchangeCode(config, callback_url);
     return { status: "authorized", auth: authSummary(await tokenState(config.clientId)) };
   })
@@ -148,6 +152,9 @@ server.registerTool(
 // VoiceAI agents
 // ---------------------------------------------------------------------------
 
+function requireOAuthMode() {
+  if (config.authMode === "cli") throw new AppError("CLI login is managed in Terminal with ctm auth login. This tool does not alter the shared CLI session.", "CLI_AUTH_EXTERNAL");
+}
 async function authHeader(accountId: string) {
   // When we know the account, make a lightweight verified call so an expired or
   // missing login fails fast with a clear, actionable message.
@@ -172,13 +179,13 @@ server.registerTool(
     annotations: { readOnlyHint: true }
   },
   safeTool(async ({ account_id, voice_bot }) => {
-    const auth = await authHeader(account_id);
-    const bots = await fetchVoiceBots(account_id, auth.header);
+    const auth = config.authMode === "cli" ? null : await authHeader(account_id);
+    const bots = auth ? await fetchVoiceBots(account_id, auth.header) : await cli.bots(account_id);
     const selectors = typeof voice_bot === "string" ? [voice_bot] : voice_bot ?? [];
     const selected = selectors.length ? selectBots(bots, selectors) : bots.filter((b) => b.instructions);
     return {
       account_id,
-      auth_mode: auth.mode,
+      auth_mode: auth?.mode ?? "cli",
       count: selected.length,
       voice_bots: selected.map((b) => ({
         id: b.id,
@@ -200,9 +207,10 @@ server.registerTool(
   {
     title: "Get Call Activities And Transcriptions",
     description:
-      "Step 3 of the review flow: one GET against the CTM calls endpoint returning a page of answered calls with transcriptions. The response includes a `plan` describing the full parallel coverage: total_pages and an array of `batches` covering `target_calls` (default 500). Dispatch one subagent per batch; each subagent calls this tool with that batch's page and per_page. Returns id, date, summary and transcript (truncated to max_transcript_chars) for each call.",
+      "Read call transcripts for analysis. CLI mode uses sequential after/next_cursor pagination over phone-call history, filters direction/transcript availability locally, and scans all statuses. Continue through empty pages while has_more=true. OAuth REST mode uses numbered pages of answered calls. Return actual reviewed coverage; workers are optional. Dates in CLI mode are UTC.",
     inputSchema: {
       account_id: z.string().describe("CTM sub-account id."),
+      after: z.string().max(8192).optional().describe("CLI mode only: next_cursor from the previous response. Keep account and filters unchanged."),
       page: z.number().int().min(1).optional().describe("Page number, starting at 1. Default 1."),
       per_page: z.number().int().min(1).max(100).optional().describe("Calls per page. Default 25; keep it small so the transcripts fit in context."),
       target_calls: z.number().int().min(0).optional().describe("How many calls the whole review should cover. The plan sizes the batch fan-out to this. Default 500. Use 0 for every available call."),
@@ -215,6 +223,15 @@ server.registerTool(
     annotations: { readOnlyHint: true, openWorldHint: true }
   },
   safeTool(async (args) => {
+    if (config.authMode === "cli") {
+      if (args.page && args.page !== 1) throw new AppError("CLI mode uses after/next_cursor, not page numbers.", "CURSOR_REQUIRED");
+      const page = await cli.calls(args.account_id, { after: args.after, perPage: args.per_page, since: args.since, until: args.until, direction: args.direction, hasTranscription: args.has_transcription });
+      const max = args.max_transcript_chars ?? 4000;
+      return { account_id: args.account_id, auth_mode: "cli", pagination: "cursor", ...page,
+        calls: page.calls.map(c => ({ ...c, transcript: c.transcript.slice(0, max), transcript_truncated: c.transcript.length > max })),
+        plan: { target_calls: args.target_calls ?? DEFAULT_TARGET_CALLS, instruction: "Process sequentially using after=next_cursor with the same account and filters. Continue through empty pages while has_more=true until the requested number of usable calls is analyzed or history is exhausted. returned counts scanned calls; with_transcript counts available transcripts on this page. Do not claim planned coverage as completed. GraphQL scans all call statuses and returns only text permitted by your user permissions." } };
+    }
+    if (args.after) throw new AppError("OAuth REST mode uses page numbers, not cursors.", "INVALID_PAGINATION");
     const auth = await authHeader(args.account_id);
     const perPage = args.per_page ?? 25;
     const page = await fetchCallsPage(args.account_id, auth.header, {

@@ -1,6 +1,6 @@
 {
   "name": "ctm-voiceai-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server that pulls CTM call transcripts and VoiceAI agent instructions so your assistant can review them and render a prompt-update HTML report, with OAuth2 login. No LLM API or key.",
   "type": "module",
   "license": "MIT",
@@ -28,7 +28,7 @@
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "prepare": "npm run build",
-    "test": "npm run build && node --test test/auth.mjs && node test/sanitize.mjs && node test/smoke.mjs && node test/render.mjs && node --test test/hosted.mjs test/postgres.mjs",
+    "test": "npm run build && node --test test/auth.mjs test/cli-graphql.mjs && node test/sanitize.mjs && node test/smoke.mjs && node test/render.mjs && node --test test/hosted.mjs test/postgres.mjs",
     "prepack": "npm run build",
     "start:hosted": "node dist/hosted/main.js",
     "hosted:setup": "node scripts/setup-hosted-dev.mjs",
@@ -41,6 +41,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "jose": "^6.2.12",
     "pg": "^8.23.1",
+    "yaml": "^2.9.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
