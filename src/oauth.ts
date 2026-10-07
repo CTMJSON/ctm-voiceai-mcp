@@ -265,13 +265,19 @@ export async function waitForLogin(config: Config, seconds: number) {
 }
 
 /** Refresh once per process; never fall back to expired tokens or another auth scheme. */
-export function getAccessToken({ clientId, forceRefresh = false, minValidityMs = 60000 }: {
-  clientId: string; forceRefresh?: boolean; minValidityMs?: number
+export function getAccessToken({ clientId, accountId, forceRefresh = false, minValidityMs = 60000 }: {
+  clientId: string; accountId?: string; forceRefresh?: boolean; minValidityMs?: number
 }) {
   return exclusive(async () => {
     requireClient(clientId);
     const tokens = await loadTokens(clientId);
     if (!tokens) return null;
+    const checkAccount = (value: { account_id: string | number | null }) => {
+      if (accountId && value.account_id != null && String(value.account_id) !== accountId) {
+        throw new AppError("The CTM OAuth grant belongs to a different account. Sign in again and select the requested account before fetching data.", "ACCOUNT_MISMATCH", 403);
+      }
+    };
+    checkAccount(tokens);
     if (!forceRefresh && tokens.expires_at - Date.now() > minValidityMs) return tokens.access_token;
     if (!tokens.refresh_token) return null;
     try {
@@ -279,6 +285,7 @@ export function getAccessToken({ clientId, forceRefresh = false, minValidityMs =
         client_id: clientId, grant_type: "refresh_token", refresh_token: tokens.refresh_token
       });
       const refreshed = toTokens(payload, clientId, tokens);
+      checkAccount(refreshed);
       await writeJson(paths().tokensFile, refreshed);
       return refreshed.access_token;
     } catch (error) {

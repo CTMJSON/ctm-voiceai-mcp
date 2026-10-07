@@ -8,8 +8,8 @@ function accountSegment(value: string) {
  return value;
 }
 /** OAuth only: a failed refresh must never downgrade to another credential. */
-export async function resolveAuthHeader(config: Config) {
-  const token = await getAccessToken({ clientId: config.clientId });
+export async function resolveAuthHeader(config: Config, accountId?: string) {
+  const token = await getAccessToken({ clientId: config.clientId, accountId });
   if (!token) throw new AppError("No valid CTM login. Run ctm_voiceai_auth_login.", "NO_AUTH");
   return { header: `Bearer ${token}`, mode: "oauth" as const };
 }
@@ -19,7 +19,8 @@ export async function resolveAuthHeader(config: Config) {
  * when the CTM login is missing or expired, instead of midway through a run.
  */
 export async function verifyAuth(config: Config, accountId: string) {
-  const auth = await resolveAuthHeader(config);
+  accountSegment(accountId);
+  const auth = await resolveAuthHeader(config, accountId);
   const url = `${API_BASE}/accounts/${accountSegment(accountId)}/calls?per_page=1`;
   try {
     await getJson(url, auth.header, { timeoutMs: 15000 });
